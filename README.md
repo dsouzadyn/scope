@@ -2,6 +2,8 @@
 
 A **macOS-native C++20** debugger built on **`liblldb` (SB API)**, **Dear ImGui (Docking + FreeType)**, **GLFW + Metal**, and **Tree-sitter (`tree-sitter-cpp`)**, designed with a **Precision Bench Instrument** aesthetic and dedicated **HFT / low-latency C++** inspection tools.
 
+![SCOPE — Precision C++20 Debugger](docs/assets/screenshot.png)
+
 ## Highlights
 
 - **Dedicated `liblldb` Worker Architecture**: All debugger operations run off the UI thread (`std::jthread`), publishing immutable `StepSnapshot` frames into a 256-stop history ring buffer so the 120 FPS Metal interface never blocks.

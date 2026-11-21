@@ -8,3 +8,6 @@
 *.yml text eol=lf
 *.md text eol=lf
 CMakeLists.txt text eol=lf
+*.png binary
+*.jpg binary
+*.webp binary
