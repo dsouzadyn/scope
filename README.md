@@ -42,8 +42,12 @@ cmake -S . -B build -G Ninja \
 
 cmake --build build
 
-# Run headless liblldb integration test suite against compiled C++ fixtures
-./build/scope_engine_test ./build/fixtures
+# Run full CTest suite (unit tests + 7-suite liblldb integration tests)
+ctest --test-dir build --output-on-failure
+
+# Build & verify macOS SCOPE.app release bundle
+./scripts/package_macos.sh v0.1.0 build dist
+./scripts/verify_package.sh dist
 
 # Launch SCOPE on a fixture or your own C++ binary
 ./build/scope ./build/fixtures/hft_orderbook

@@ -7,8 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  build-macos:
-    name: Build & Package (macOS Apple Silicon)
+  build-and-test-macos:
+    name: Build, Test & Verify Package (macOS Apple Silicon)
     runs-on: macos-15
 
     steps:
@@ -30,11 +30,19 @@ jobs:
             -DCMAKE_OBJCXX_COMPILER=/usr/bin/clang++ \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
-      - name: Build SCOPE, fixtures & engine tests
+      - name: Build SCOPE, fixtures & test suites
         run: cmake --build build
 
-      - name: Verify macOS .app packaging
+      - name: Run Unit Tests (CTest)
+        run: ctest --test-dir build --output-on-failure -R "^scope_unit_tests$"
+
+      - name: Run End-to-End liblldb Engine Integration Tests
         run: |
-          chmod +x scripts/package_macos.sh
+          sudo DevToolsSecurity -enable || true
+          ctest --test-dir build --output-on-failure -R "^scope_engine_test$"
+
+      - name: Package & Verify macOS SCOPE.app Bundle
+        run: |
+          chmod +x scripts/package_macos.sh scripts/verify_package.sh
           ./scripts/package_macos.sh "ci-${GITHUB_SHA::7}" build dist
-          otool -L dist/SCOPE.app/Contents/MacOS/scope
+          ./scripts/verify_package.sh dist

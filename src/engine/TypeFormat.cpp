@@ -80,38 +80,22 @@ std::string simplify_cpp_type(std::string_view raw_type) {
     strip_default_allocator(out);
     strip_default_hash_and_eq(out);
     replace_all(out, " >", ">");
-    replace_all(out, "std::default_delete<", ""); // cleanup if unique_ptr had trailing default_delete
-    // Handle unique_ptr<T, T>> edge case cleanly:
-    if (out.find("std::unique_ptr<") != std::string::npos) {
-        size_t start = out.find("std::unique_ptr<");
-        size_t comma = out.find(", ", start);
-        if (comma != std::string::npos) {
-            int depth = 1;
-            size_t i = start + 16;
-            bool top_level_comma = false;
-            while (i < out.size() && depth > 0) {
-                if (out[i] == '<') ++depth;
-                else if (out[i] == '>') --depth;
-                else if (out[i] == ',' && depth == 1) {
-                    comma = i;
-                    top_level_comma = true;
-                    break;
-                }
-                ++i;
-            }
-            if (top_level_comma) {
-                // Find matching closing '>'
-                size_t j = comma;
-                depth = 1;
-                while (j < out.size() && depth > 0) {
-                    if (out[j] == '<') ++depth;
-                    else if (out[j] == '>') --depth;
-                    ++j;
-                }
-                if (depth == 0) {
-                    out.erase(comma, (j - 1) - comma);
-                }
-            }
+
+    // Strip ", std::default_delete<...>" cleanly for std::unique_ptr<T>
+    const std::string dd_needle = ", std::default_delete<";
+    size_t pos = 0;
+    while ((pos = out.find(dd_needle, pos)) != std::string::npos) {
+        int depth = 1;
+        size_t i = pos + dd_needle.size();
+        while (i < out.size() && depth > 0) {
+            if (out[i] == '<') ++depth;
+            else if (out[i] == '>') --depth;
+            ++i;
+        }
+        if (depth == 0) {
+            out.erase(pos, i - pos);
+        } else {
+            break;
         }
     }
     return out;

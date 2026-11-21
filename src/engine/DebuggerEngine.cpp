@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -76,9 +77,13 @@ std::string stop_reason_name(lldb::StopReason r) {
     }
 }
 
-bool is_crash_stop(lldb::StopReason r, const std::string& desc) {
+bool is_crash_stop(lldb::StopReason r, int32_t signo, const std::string& desc) {
     if (r == lldb::eStopReasonException) return true;
     if (r == lldb::eStopReasonSignal) {
+        if (signo == SIGSEGV || signo == SIGBUS || signo == SIGABRT ||
+            signo == SIGILL || signo == SIGFPE) {
+            return true;
+        }
         if (desc.find("SIGSEGV") != std::string::npos ||
             desc.find("SIGBUS") != std::string::npos ||
             desc.find("SIGABRT") != std::string::npos ||
@@ -459,11 +464,10 @@ void DebuggerEngine::set_breakpoint_log(int32_t bp_id, const std::string& log_ms
             if (bp.IsValid()) {
                 if (log_msg.empty()) {
                     bp_log_messages_.erase(bp_id);
-                    bp.SetAutoContinue(false);
                 } else {
                     bp_log_messages_[bp_id] = log_msg;
-                    bp.SetAutoContinue(true);
                 }
+                bp.SetAutoContinue(false);
                 if (bp.GetNumLocations() > 0) {
                     lldb::SBLineEntry le = bp.GetLocationAtIndex(0).GetAddress().GetLineEntry();
                     std::string f = safe_str(le.GetFileSpec().GetFilename());
@@ -992,7 +996,6 @@ void DebuggerEngine::apply_pending_breakpoints() {
             if (!pb.condition.empty()) bp.SetCondition(pb.condition.c_str());
             if (!pb.log_message.empty()) {
                 bp_log_messages_[bp.GetID()] = pb.log_message;
-                bp.SetAutoContinue(true);
             }
         }
     }
@@ -1013,17 +1016,6 @@ void DebuggerEngine::poll_lldb_events() {
                         continue;
                     }
                     drain_process_io();
-                    // Check if stopped at a logpoint (with {expr} interpolation & Δt latency!)
-                    lldb::SBThread t = process_.GetSelectedThread();
-                    if (t.IsValid() && t.GetStopReason() == lldb::eStopReasonBreakpoint) {
-                        int32_t bp_id = static_cast<int32_t>(t.GetStopReasonDataAtIndex(0));
-                        auto it = bp_log_messages_.find(bp_id);
-                        if (it != bp_log_messages_.end()) {
-                            std::string msg = interpolate_logpoint_msg(
-                                bp_id, it->second, t.GetFrameAtIndex(0));
-                            append_console(ConsoleLineKind::System, msg);
-                        }
-                    }
 
                     // Select the first thread that has a non-none stop reason
                     uint32_t num_threads = process_.GetNumThreads();
@@ -1033,6 +1025,20 @@ void DebuggerEngine::poll_lldb_events() {
                         if (r != lldb::eStopReasonNone && r != lldb::eStopReasonInvalid) {
                             process_.SetSelectedThread(th);
                             break;
+                        }
+                    }
+
+                    // Check if stopped at a logpoint -> safely evaluate {expr} + Δt while stopped, then auto-continue!
+                    lldb::SBThread t = process_.GetSelectedThread();
+                    if (t.IsValid() && t.GetStopReason() == lldb::eStopReasonBreakpoint) {
+                        int32_t bp_id = static_cast<int32_t>(t.GetStopReasonDataAtIndex(0));
+                        auto it = bp_log_messages_.find(bp_id);
+                        if (it != bp_log_messages_.end()) {
+                            std::string msg = interpolate_logpoint_msg(
+                                bp_id, it->second, t.GetFrameAtIndex(0));
+                            append_console(ConsoleLineKind::System, msg);
+                            process_.Continue();
+                            continue;
                         }
                     }
 
@@ -1293,18 +1299,21 @@ CrashInfo DebuggerEngine::extract_crash_info(lldb::SBThread thread,
     thread.GetStopDescription(desc_buf, sizeof(desc_buf));
     std::string desc = desc_buf;
     lldb::StopReason reason = thread.GetStopReason();
+    int32_t signo = (reason == lldb::eStopReasonSignal && thread.GetStopReasonDataCount() > 0)
+                        ? static_cast<int32_t>(thread.GetStopReasonDataAtIndex(0))
+                        : 0;
 
-    if (!is_crash_stop(reason, desc)) return ci;
+    if (!is_crash_stop(reason, signo, desc)) return ci;
 
     ci.is_crash = true;
     ci.summary = desc;
     if (reason == lldb::eStopReasonSignal) {
-        ci.signal_number = static_cast<int32_t>(thread.GetStopReasonDataAtIndex(0));
-        if (desc.find("SIGSEGV") != std::string::npos) ci.signal_name = "SIGSEGV";
-        else if (desc.find("SIGBUS") != std::string::npos) ci.signal_name = "SIGBUS";
-        else if (desc.find("SIGABRT") != std::string::npos) ci.signal_name = "SIGABRT";
-        else if (desc.find("SIGILL") != std::string::npos) ci.signal_name = "SIGILL";
-        else if (desc.find("SIGFPE") != std::string::npos) ci.signal_name = "SIGFPE";
+        ci.signal_number = signo;
+        if (signo == SIGSEGV || desc.find("SIGSEGV") != std::string::npos) ci.signal_name = "SIGSEGV";
+        else if (signo == SIGBUS || desc.find("SIGBUS") != std::string::npos) ci.signal_name = "SIGBUS";
+        else if (signo == SIGABRT || desc.find("SIGABRT") != std::string::npos) ci.signal_name = "SIGABRT";
+        else if (signo == SIGILL || desc.find("SIGILL") != std::string::npos) ci.signal_name = "SIGILL";
+        else if (signo == SIGFPE || desc.find("SIGFPE") != std::string::npos) ci.signal_name = "SIGFPE";
         else ci.signal_name = "SIGNAL " + std::to_string(ci.signal_number);
     } else {
         ci.signal_name = "EXC_BAD_ACCESS";

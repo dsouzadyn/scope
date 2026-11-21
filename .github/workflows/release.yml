@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   release-macos:
-    name: Build & Publish macOS Release (arm64)
+    name: Build, Test & Publish macOS Release (arm64)
     runs-on: macos-15
 
     steps:
@@ -48,13 +48,22 @@ jobs:
             -DCMAKE_OBJCXX_COMPILER=/usr/bin/clang++ \
             -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build SCOPE & sample fixtures
+      - name: Build SCOPE, fixtures & test suites
         run: cmake --build build
 
-      - name: Package SCOPE.app & checksums
+      - name: Gate 1 — Run Unit Tests
+        run: ctest --test-dir build --output-on-failure -R "^scope_unit_tests$"
+
+      - name: Gate 2 — Run End-to-End liblldb Engine Integration Tests
         run: |
-          chmod +x scripts/package_macos.sh
+          sudo DevToolsSecurity -enable || true
+          ctest --test-dir build --output-on-failure -R "^scope_engine_test$"
+
+      - name: Gate 3 — Package & Verify SCOPE.app Integrity
+        run: |
+          chmod +x scripts/package_macos.sh scripts/verify_package.sh
           ./scripts/package_macos.sh "${{ steps.meta.outputs.tag }}" build dist
+          ./scripts/verify_package.sh dist
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2

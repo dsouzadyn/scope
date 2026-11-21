@@ -131,12 +131,25 @@ set_target_properties(scope PROPERTIES
 )
 
 # ------------------------------------------------------------------------------
-# 5) C++ Test Fixtures & Engine Integration Tests
+# 5) C++ Test Fixtures, Unit Tests & Engine Integration Tests (CTest)
 # ------------------------------------------------------------------------------
+enable_testing()
 add_subdirectory(fixtures)
+
+add_executable(scope_unit_tests tests/unit_tests.cpp)
+target_link_libraries(scope_unit_tests PRIVATE scope_engine)
+set_target_properties(scope_unit_tests PROPERTIES
+    BUILD_RPATH "${LLVM_PREFIX}/lib;${TREESITTER_PREFIX}/lib"
+)
+add_test(NAME scope_unit_tests
+    COMMAND scope_unit_tests "${CMAKE_SOURCE_DIR}/fixtures"
+)
 
 add_executable(scope_engine_test tests/engine_test.cpp)
 target_link_libraries(scope_engine_test PRIVATE scope_engine)
 set_target_properties(scope_engine_test PROPERTIES
     BUILD_RPATH "${LLVM_PREFIX}/lib;${TREESITTER_PREFIX}/lib"
+)
+add_test(NAME scope_engine_test
+    COMMAND scope_engine_test "${CMAKE_BINARY_DIR}/fixtures"
 )
