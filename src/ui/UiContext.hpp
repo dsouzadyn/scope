@@ -31,6 +31,11 @@ enum class ProbeTab {
     OrderBook,
 };
 
+/// Shared per-frame coordination context passed to all 7 Instrument Bays.
+///
+/// Holds the active `StepSnapshot` (either live or historically scrubbed via
+/// `history_cursor`), cross-bay focus triggers, and helper methods for jumping
+/// between Source, Inspector, Memory, and Data Probes.
 struct UiContext {
     DebuggerEngine* engine = nullptr;
     SyntaxHighlighter* highlighter = nullptr;
@@ -82,8 +87,7 @@ struct UiContext {
     int book_scale_idx = 1; // 0=1, 1=1e4, 2=1e6, 3=1e8
 
     bool is_scrubbing_history() const {
-        return history_cursor >= 0 &&
-               history_cursor < static_cast<int>(history.size()) - 1;
+        return history_cursor >= 0 && history_cursor < static_cast<int>(history.size()) - 1;
     }
 
     void jump_to_source(const std::string& file, uint32_t line) {
@@ -131,9 +135,7 @@ struct UiContext {
         focus_probes_bay = true;
     }
 
-    void pin_ring_buffer(const std::string& buf,
-                         const std::string& cap,
-                         const std::string& head,
+    void pin_ring_buffer(const std::string& buf, const std::string& cap, const std::string& head,
                          const std::string& tail) {
         std::snprintf(ring_buf_buf, sizeof(ring_buf_buf), "%s", buf.c_str());
         std::snprintf(ring_cap_buf, sizeof(ring_cap_buf), "%s", cap.c_str());

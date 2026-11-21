@@ -19,94 +19,148 @@
 
 namespace scope {
 
+/// Asynchronous, thread-safe liblldb (SB API) debugging engine.
+///
+/// All LLDB operations execute on an internal worker `std::jthread` so the 120 FPS
+/// UI thread never blocks. Public control methods enqueue work asynchronously; read
+/// accessors return immutable snapshots protected by an internal mutex.
+///
+/// On every target stop, active memory views and data probes are refreshed before
+/// publishing `latest_snapshot()` so the UI observes an atomically consistent frame.
 class DebuggerEngine {
-public:
+  public:
+    /// Initializes liblldb (ref-counted) and starts the background worker thread.
     DebuggerEngine();
+    /// Stops the worker thread, terminates any active target, and releases liblldb.
     ~DebuggerEngine();
 
     DebuggerEngine(const DebuggerEngine&) = delete;
     DebuggerEngine& operator=(const DebuggerEngine&) = delete;
 
-    // Lifecycle & execution commands (thread-safe, async)
-    void launch(const std::string& exe_path,
-                const std::vector<std::string>& args = {},
-                const std::string& cwd = "",
-                bool stop_at_main = true);
+    /// Launches a local executable with optional CLI arguments and working directory.
+    /// When `stop_at_main` is true, arms a one-shot breakpoint at `main`.
+    void launch(const std::string& exe_path, const std::vector<std::string>& args = {},
+                const std::string& cwd = "", bool stop_at_main = true);
+    /// Attaches to an already-running local process by PID.
     void attach(uint64_t pid);
+    /// Loads a post-mortem core dump paired with its debug-symbol executable via
+    /// `SBTarget::LoadCore`.
     void open_core(const std::string& exe_path, const std::string& core_path);
+    /// Connects to a remote `gdb-remote` stub (e.g., `lldb-server` or `rr replay -s`).
     void connect_remote(const std::string& exe_path, const std::string& remote_url);
+    /// Re-launches the most recently launched target, preserving user breakpoints.
     void restart();
+    /// Kills the active target process.
     void terminate();
 
+    /// Resumes target execution.
     void continue_exec();
+    /// Asynchronously interrupts a running target process.
     void pause_exec();
+    /// Steps over one source line on the selected thread.
     void step_over();
+    /// Steps into the call on the current source line.
     void step_into();
+    /// Steps out of the current stack frame.
     void step_out();
+    /// Executes a single machine instruction on the selected thread.
     void step_instruction();
+    /// Issues a reverse-continue packet (`bc`) on reverse-capable remote stubs (`rr`).
     void reverse_continue();
+    /// Issues a reverse-step packet (`bs`) on reverse-capable remote stubs (`rr`).
     void reverse_step_over();
+    /// Issues a reverse-step-into packet on reverse-capable remote stubs (`rr`).
     void reverse_step_into();
 
+    /// Selects the active thread by LLDB thread ID and refreshes the snapshot.
     void select_thread(uint64_t thread_id);
+    /// Selects a stack frame index on the active thread and refreshes locals/disassembly.
     void select_frame(uint32_t frame_idx);
+    /// Controls lazy unwinding of background threads (64 frames when true, 4 frames when false).
     void set_expand_all_threads(bool expand);
 
-    // Breakpoints & hardware watchpoints
+    /// Toggles a line breakpoint at `file:line` (persists across restarts).
     void toggle_breakpoint(const std::string& file, uint32_t line);
+    /// Sets or clears (when empty) a C++ boolean condition on breakpoint `bp_id`.
     void set_breakpoint_condition(int32_t bp_id, const std::string& condition);
+    /// Converts breakpoint `bp_id` into a non-stopping logpoint with `{expr}` interpolation and
+    /// `+Δt`.
     void set_breakpoint_log(int32_t bp_id, const std::string& log_msg);
+    /// Permanently deletes breakpoint `bp_id`.
     void remove_breakpoint(int32_t bp_id);
 
-    void add_watchpoint(uint64_t address,
-                        uint64_t byte_size,
-                        bool watch_read,
-                        bool watch_write,
+    /// Arms a hardware data watchpoint on `[address, address + byte_size)` (clamped to 1..8B).
+    void add_watchpoint(uint64_t address, uint64_t byte_size, bool watch_read, bool watch_write,
                         const std::string& label);
+    /// Resolves `expr` in the selected frame and arms a hardware watchpoint on its load address.
     void add_variable_watchpoint(const std::string& expr, bool watch_read, bool watch_write);
+    /// Sets or clears an LLDB condition expression on hardware watchpoint `wp_id`.
     void set_watchpoint_condition(int32_t wp_id, const std::string& condition);
+    /// Deletes hardware watchpoint `wp_id`.
     void remove_watchpoint(int32_t wp_id);
 
-    // Watches, symbols & evaluation
+    /// Pins a C++ expression to the Watch inspector (re-evaluated on every stop).
     void add_watch_expr(const std::string& expr);
+    /// Removes a pinned Watch expression.
     void remove_watch_expr(const std::string& expr);
+    /// Evaluates a single identifier/expression for the source hover popover.
     void eval_hover(const std::string& expr);
+    /// Searches target functions and compile-unit filenames matching `query`.
     void search_symbols(const std::string& query);
+    /// Executes a raw LLDB command via `SBCommandInterpreter` and logs output to console.
     void run_lldb_command(const std::string& cmd);
 
-    // Memory & Probes (auto-refreshed on every stop once configured)
+    /// Configures live memory inspection (hex dump, byte diffs, `SBType`
+    /// field/padding/false-sharing analysis).
     void configure_memory_view(const std::string& addr_or_expr, uint64_t size = 512);
+    /// Configures the Struct-Table view on a container or array expression.
     void configure_struct_table(const std::string& expr);
+    /// Configures the Waveform oscilloscope probe on a numeric vector/array expression.
     void configure_waveform_probe(const std::string& expr, uint32_t max_samples = 512);
+    /// Configures the 2D Pixel Buffer probe (`channels` = 1, 3, or 4) for Metal texture upload.
     void configure_pixel_probe(const std::string& expr, int width, int height, int channels = 4);
+    /// Configures the Pointer Graph probe starting from root pointer `expr` (with cycle detection).
     void configure_pointer_graph(const std::string& expr, uint32_t max_nodes = 48);
-    void configure_ring_probe(const std::string& buf_expr,
-                              const std::string& cap_expr,
-                              const std::string& head_expr,
-                              const std::string& tail_expr);
-    void configure_orderbook_probe(const std::string& bids_expr,
-                                   const std::string& asks_expr,
+    /// Configures the HFT SPSC/MPSC Ring Buffer probe (`buf`, `capacity`, `head`, `tail`).
+    void configure_ring_probe(const std::string& buf_expr, const std::string& cap_expr,
+                              const std::string& head_expr, const std::string& tail_expr);
+    /// Configures the HFT L2 Order Book probe with fixed-point `price_scale` and crossed-book
+    /// detection.
+    void configure_orderbook_probe(const std::string& bids_expr, const std::string& asks_expr,
                                    double price_scale = 10000.0);
 
-    // Thread-safe read accessors for the 120 FPS UI thread
+    /// Returns the latest immutable session snapshot.
     std::shared_ptr<const StepSnapshot> latest_snapshot() const;
+    /// Returns all recorded stop snapshots (ring buffer up to 256 stops) for Step-Delta scrubbing.
     std::vector<std::shared_ptr<const StepSnapshot>> history_snapshots() const;
+    /// Returns the latest memory inspection snapshot (bytes, diffs, struct overlays, padding,
+    /// warnings).
     MemorySnapshot memory_snapshot() const;
+    /// Returns the latest Struct-Table container projection.
     StructTableData struct_table() const;
+    /// Returns the latest Waveform probe samples and min/max/avg statistics.
     WaveformProbeData waveform_probe() const;
+    /// Returns the latest normalized RGBA pixel buffer for Metal texture upload.
     PixelProbeData pixel_probe() const;
+    /// Returns the latest traversed pointer graph and cycle diagnostics.
     PointerGraphData pointer_graph() const;
+    /// Returns the latest SPSC/MPSC ring buffer occupancy snapshot.
     RingBufferProbeData ring_probe() const;
+    /// Returns the latest L2 Order Book depth snapshot and crossed-book flag.
     OrderBookProbeData orderbook_probe() const;
+    /// Returns the latest `search_symbols()` matches.
     std::vector<SymbolMatch> symbol_results() const;
+    /// Returns the latest debounced hover evaluation result.
     HoverEvalResult hover_result() const;
+    /// Returns buffered target stdout/stderr and LLDB REPL console lines.
     std::vector<ConsoleLine> console_lines() const;
+    /// Clears all buffered console lines.
     void clear_console();
 
-    // Synchronous barrier for integration tests
+    /// Blocks until the worker command queue drains (intended for headless integration tests).
     void wait_idle_for_test();
 
-private:
+  private:
     struct PendingBreakpoint {
         std::string file;
         uint32_t line = 0;
@@ -121,10 +175,8 @@ private:
     void drain_process_io();
 
     // Internal worker-thread operations (always called on worker_)
-    void do_launch(const std::string& exe_path,
-                   const std::vector<std::string>& args,
-                   const std::string& cwd,
-                   bool stop_at_main);
+    void do_launch(const std::string& exe_path, const std::vector<std::string>& args,
+                   const std::string& cwd, bool stop_at_main);
     void do_attach(uint64_t pid);
     void do_open_core(const std::string& exe_path, const std::string& core_path);
     void do_connect_remote(const std::string& exe_path, const std::string& remote_url);
@@ -137,21 +189,17 @@ private:
     void refresh_pointer_graph_worker();
     void refresh_ring_probe_worker();
     void refresh_orderbook_probe_worker();
-    std::string interpolate_logpoint_msg(int32_t bp_id, const std::string& tmpl, lldb::SBFrame frame);
+    std::string interpolate_logpoint_msg(int32_t bp_id, const std::string& tmpl,
+                                         lldb::SBFrame frame);
 
     ProvenanceKind classify_address_lazy(uint64_t addr, uint64_t sp);
 
-    VarNode extract_var(lldb::SBValue val,
-                        const std::string& expr_path,
-                        int depth,
-                        uint64_t sp,
+    VarNode extract_var(lldb::SBValue val, const std::string& expr_path, int depth, uint64_t sp,
                         const std::unordered_map<std::string, std::string>& prev_values,
-                        std::vector<StepDeltaEntry>* deltas,
-                        const char* delta_category);
+                        std::vector<StepDeltaEntry>* deltas, const char* delta_category);
 
     std::vector<DisasmInstruction> extract_disassembly(lldb::SBFrame frame);
-    CrashInfo extract_crash_info(lldb::SBThread thread,
-                                 const std::vector<FrameInfo>& frames,
+    CrashInfo extract_crash_info(lldb::SBThread thread, const std::vector<FrameInfo>& frames,
                                  uint64_t sp);
     void append_console(ConsoleLineKind kind, const std::string& text);
 

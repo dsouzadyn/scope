@@ -34,19 +34,27 @@ struct HighlightedFile {
     bool loaded = false;
 };
 
+/// Cached Tree-sitter C++20 AST syntax highlighter.
+///
+/// Parses source files on first access and caches per-line sorted `SyntaxSpan`
+/// vectors. Callers must not hold references returned by `get_file()` across
+/// `invalidate()` calls on the same path.
 class SyntaxHighlighter {
-public:
+  public:
     SyntaxHighlighter();
     ~SyntaxHighlighter();
 
     SyntaxHighlighter(const SyntaxHighlighter&) = delete;
     SyntaxHighlighter& operator=(const SyntaxHighlighter&) = delete;
 
-    // Loads and highlights a file from disk (cached by path).
+    /// Loads and highlights `path` from disk, returning a cached `HighlightedFile`.
+    /// Returns an entry with `loaded == false` if the file cannot be read.
     const HighlightedFile& get_file(const std::string& path);
+
+    /// Evicts `path` from the cache so the next `get_file()` re-parses from disk.
     void invalidate(const std::string& path);
 
-private:
+  private:
     HighlightedFile parse_file(const std::string& path);
     std::unordered_map<std::string, HighlightedFile> cache_;
 };

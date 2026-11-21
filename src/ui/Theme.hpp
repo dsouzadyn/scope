@@ -22,12 +22,12 @@ struct Palette {
     ImU32 text_secondary;
     ImU32 text_dim;
 
-    ImU32 signal_orange; // PC, active stop, active bay LED
-    ImU32 phosphor_green;// Running state, waveform trace, heap
-    ImU32 osc_amber;     // Mutated values/bytes/regs
-    ImU32 cobalt;        // Pointers, addresses, stack
-    ImU32 fault_crimson; // Breakpoints, crashes, unmapped
-    ImU32 purple_hint;   // Preprocessor / macro accent (subtle, drafting violet)
+    ImU32 signal_orange;  // PC, active stop, active bay LED
+    ImU32 phosphor_green; // Running state, waveform trace, heap
+    ImU32 osc_amber;      // Mutated values/bytes/regs
+    ImU32 cobalt;         // Pointers, addresses, stack
+    ImU32 fault_crimson;  // Breakpoints, crashes, unmapped
+    ImU32 purple_hint;    // Preprocessor / macro accent (subtle, drafting violet)
 
     // Syntax colors
     ImU32 syn_keyword;
@@ -46,18 +46,27 @@ struct Palette {
 };
 
 struct FontSet {
-    ImFont* code = nullptr;     // 13.5px regular mono
-    ImFont* bold = nullptr;     // 13.5px semibold mono
-    ImFont* micro = nullptr;    // 11.0px uppercase telemetry labels
-    ImFont* display = nullptr;  // 16.0px PC / status readouts
+    ImFont* code = nullptr;    // 13.5px regular mono
+    ImFont* bold = nullptr;    // 13.5px semibold mono
+    ImFont* micro = nullptr;   // 11.0px uppercase telemetry labels
+    ImFont* display = nullptr; // 16.0px PC / status readouts
 };
 
+/// Global visual theme manager for the Precision Bench Instrument UI.
+///
+/// Loads FreeType-hinted JetBrains Mono / SF Mono font tiers and applies sharp
+/// rectilinear ImGui styling (Anodized Lab dark or Technical Schematic light).
 class Theme {
-public:
+  public:
+    /// Loads and builds the FreeType font atlas (`code`, `bold`, `micro`, `display`).
     static void load_fonts(float dpi_scale);
+    /// Applies palette colors and rectilinear instrument metrics to `ImGui::GetStyle()`.
     static void apply(ThemeMode mode);
+    /// Returns the currently active `ThemeMode`.
     static ThemeMode current_mode();
+    /// Returns the active color palette.
     static const Palette& palette();
+    /// Returns the loaded monospace font tier set.
     static const FontSet& fonts();
 };
 

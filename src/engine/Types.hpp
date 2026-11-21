@@ -7,24 +7,26 @@
 
 namespace scope {
 
+/// High-level lifecycle state of the active debugging session.
 enum class SessionState {
-    Idle,
-    Running,
-    Stopped,
-    Fault,
-    Exited,
+    Idle,    ///< No live target process.
+    Running, ///< Target process is actively executing.
+    Stopped, ///< Target paused at a breakpoint, step, watchpoint, or user interrupt.
+    Fault,   ///< Target stopped on a fatal signal or hardware exception (Crash Autopsy active).
+    Exited,  ///< Target process terminated normally or was killed.
 };
 
+/// Memory region classification attached to pointer values and fault addresses.
 enum class ProvenanceKind {
-    None,
-    Stack,
-    Heap,
-    Text,
-    Rodata,
-    Data,
-    Null,
-    Unmapped,
-    Unknown,
+    None,     ///< Not a pointer or address.
+    Stack,    ///< Within active thread stack window or stack VM region.
+    Heap,     ///< Read-write anonymous / MALLOC heap region.
+    Text,     ///< Executable code segment.
+    Rodata,   ///< Read-only data / string literal segment.
+    Data,     ///< Named read-write data segment.
+    Null,     ///< Null or low-page offset (< 0x1000).
+    Unmapped, ///< Guard page or unmapped virtual address.
+    Unknown,  ///< Region could not be resolved.
 };
 
 struct MemoryRegion {

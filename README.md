@@ -59,6 +59,10 @@ cmake --build build-cov --target scope_unit_tests scope_engine_test fixture_step
 ./build/scope ./build/fixtures/hft_orderbook
 ```
 
+## Architecture
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full threading model, module map, HFT inspection internals, and release-gate verification details.
+
 ## Keybindings
 
 | Shortcut | Action |
