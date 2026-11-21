@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-and-test-macos:
-    name: Build, Test & Verify Package (macOS Apple Silicon)
+    name: Build, Test, Coverage & Verify Package (macOS Apple Silicon)
     runs-on: macos-15
 
     steps:
@@ -22,7 +22,7 @@ jobs:
           brew update
           brew install llvm glfw freetype tree-sitter cmake ninja
 
-      - name: Configure CMake (Ninja)
+      - name: Configure CMake (RelWithDebInfo)
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_C_COMPILER=/usr/bin/clang \
@@ -33,16 +33,33 @@ jobs:
       - name: Build SCOPE, fixtures & test suites
         run: cmake --build build
 
-      - name: Run Unit Tests (CTest)
-        run: ctest --test-dir build --output-on-failure -R "^scope_unit_tests$"
-
-      - name: Run End-to-End liblldb Engine Integration Tests
-        run: |
-          sudo DevToolsSecurity -enable || true
-          ctest --test-dir build --output-on-failure -R "^scope_engine_test$"
-
       - name: Package & Verify macOS SCOPE.app Bundle
         run: |
           chmod +x scripts/package_macos.sh scripts/verify_package.sh
           ./scripts/package_macos.sh "ci-${GITHUB_SHA::7}" build dist
           ./scripts/verify_package.sh dist
+
+      - name: Configure & Build Instrumented Coverage Target
+        run: |
+          cmake -S . -B build-cov -G Ninja \
+            -DCMAKE_C_COMPILER=/usr/bin/clang \
+            -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+            -DCMAKE_OBJCXX_COMPILER=/usr/bin/clang++ \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DSCOPE_ENABLE_COVERAGE=ON
+          cmake --build build-cov --target scope_unit_tests scope_engine_test fixture_step_basics fixture_stl_containers fixture_memory_watch fixture_multithread fixture_crash_autopsy fixture_hft_orderbook
+
+      - name: Run Unit + Integration Tests with LLVM Code Coverage Gate
+        run: |
+          sudo DevToolsSecurity -enable || true
+          chmod +x scripts/coverage.sh
+          ./scripts/coverage.sh build-cov coverage
+
+      - name: Upload Coverage Reports (LCOV + HTML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scope-coverage-macos
+          path: |
+            coverage/coverage.info
+            coverage/html

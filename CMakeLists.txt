@@ -11,6 +11,8 @@ set(CMAKE_OBJCXX_STANDARD 20)
 set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+option(SCOPE_ENABLE_COVERAGE "Enable LLVM source-based code coverage instrumentation" OFF)
+
 function(detect_brew_prefix var formula fallback)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         execute_process(
@@ -92,6 +94,10 @@ target_link_libraries(scope_engine PUBLIC
 set_target_properties(scope_engine PROPERTIES
     BUILD_RPATH "${LLVM_PREFIX}/lib;${TREESITTER_PREFIX}/lib"
 )
+if(SCOPE_ENABLE_COVERAGE)
+    target_compile_options(scope_engine PRIVATE -fprofile-instr-generate -fcoverage-mapping -O0)
+    target_link_options(scope_engine PUBLIC -fprofile-instr-generate -fcoverage-mapping)
+endif()
 
 # ------------------------------------------------------------------------------
 # 4) SCOPE Desktop Application (GLFW + Metal + Dear ImGui)

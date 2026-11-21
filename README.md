@@ -45,6 +45,11 @@ cmake --build build
 # Run full CTest suite (unit tests + 7-suite liblldb integration tests)
 ctest --test-dir build --output-on-failure
 
+# Generate LLVM source-based code coverage (LCOV + HTML + 75% line gate)
+cmake -S . -B build-cov -G Ninja -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_OBJCXX_COMPILER=/usr/bin/clang++ -DCMAKE_BUILD_TYPE=Debug -DSCOPE_ENABLE_COVERAGE=ON
+cmake --build build-cov --target scope_unit_tests scope_engine_test fixture_step_basics fixture_stl_containers fixture_memory_watch fixture_multithread fixture_crash_autopsy fixture_hft_orderbook
+./scripts/coverage.sh build-cov coverage
+
 # Build & verify macOS SCOPE.app release bundle
 ./scripts/package_macos.sh v0.1.0 build dist
 ./scripts/verify_package.sh dist

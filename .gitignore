@@ -1,7 +1,11 @@
 build/
+build-cov/
+coverage/
 dist/
 .cache/
 imgui.ini
 .DS_Store
 *.dSYM/
+*.profraw
+*.profdata
 compile_commands.json
