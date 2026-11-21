@@ -75,3 +75,9 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full threading model, m
 | `Cmd+Shift+F10` | Step Instruction (Assembly) |
 | `Cmd+R` | Restart Target |
 | `Cmd+K` | Command, Fixture & Live Symbol/File Palette |
+
+## Attribution
+
+Created by **Dylan Dsouza** (`dsouzadyn@gmail.com`), built in collaboration with **Antigravity** (Google DeepMind) powered by **Gemini 4**.
+
+Licensed under the [MIT License](LICENSE).
