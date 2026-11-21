@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
-project(scope_debugger LANGUAGES C CXX OBJCXX)
+project(scope_debugger VERSION 0.1.0 LANGUAGES C CXX OBJCXX)
+
+if(NOT APPLE)
+    message(FATAL_ERROR "SCOPE is a macOS-only application (Metal + Cocoa + Homebrew liblldb).")
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,11 +11,26 @@ set(CMAKE_OBJCXX_STANDARD 20)
 set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Homebrew prefixes on Apple Silicon / Intel macOS
-set(LLVM_PREFIX "/opt/homebrew/opt/llvm" CACHE PATH "Homebrew LLVM prefix")
-set(GLFW_PREFIX "/opt/homebrew/opt/glfw" CACHE PATH "Homebrew GLFW prefix")
-set(FREETYPE_PREFIX "/opt/homebrew/opt/freetype" CACHE PATH "Homebrew FreeType prefix")
-set(TREESITTER_PREFIX "/opt/homebrew/opt/tree-sitter" CACHE PATH "Homebrew tree-sitter prefix")
+function(detect_brew_prefix var formula fallback)
+    if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
+        execute_process(
+            COMMAND brew --prefix ${formula}
+            OUTPUT_VARIABLE _prefix
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(_prefix)
+            set(${var} "${_prefix}" CACHE PATH "Homebrew ${formula} prefix" FORCE)
+        else()
+            set(${var} "${fallback}" CACHE PATH "Homebrew ${formula} prefix" FORCE)
+        endif()
+    endif()
+endfunction()
+
+detect_brew_prefix(LLVM_PREFIX llvm "/opt/homebrew/opt/llvm")
+detect_brew_prefix(GLFW_PREFIX glfw "/opt/homebrew/opt/glfw")
+detect_brew_prefix(FREETYPE_PREFIX freetype "/opt/homebrew/opt/freetype")
+detect_brew_prefix(TREESITTER_PREFIX tree-sitter "/opt/homebrew/opt/tree-sitter")
 
 # ------------------------------------------------------------------------------
 # 1) Third-party: Dear ImGui (docking + FreeType + GLFW + Metal)

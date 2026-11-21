@@ -1,0 +1,40 @@
+name: macOS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-macos:
+    name: Build & Package (macOS Apple Silicon)
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Homebrew dependencies
+        run: |
+          brew update
+          brew install llvm glfw freetype tree-sitter cmake ninja
+
+      - name: Configure CMake (Ninja)
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_C_COMPILER=/usr/bin/clang \
+            -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+            -DCMAKE_OBJCXX_COMPILER=/usr/bin/clang++ \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Build SCOPE, fixtures & engine tests
+        run: cmake --build build
+
+      - name: Verify macOS .app packaging
+        run: |
+          chmod +x scripts/package_macos.sh
+          ./scripts/package_macos.sh "ci-${GITHUB_SHA::7}" build dist
+          otool -L dist/SCOPE.app/Contents/MacOS/scope

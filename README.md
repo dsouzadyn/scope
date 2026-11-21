@@ -1,6 +1,6 @@
-# SCOPE — Precision C++20 Debugger
+# SCOPE — Precision C++20 Debugger (macOS)
 
-A pure native **C++20** debugger built on **`liblldb` (SB API)**, **Dear ImGui (Docking + FreeType)**, **GLFW + Metal**, and **Tree-sitter (`tree-sitter-cpp`)**, designed with a **Precision Bench Instrument** aesthetic and dedicated **HFT / low-latency C++** inspection tools.
+A **macOS-native C++20** debugger built on **`liblldb` (SB API)**, **Dear ImGui (Docking + FreeType)**, **GLFW + Metal**, and **Tree-sitter (`tree-sitter-cpp`)**, designed with a **Precision Bench Instrument** aesthetic and dedicated **HFT / low-latency C++** inspection tools.
 
 ## Highlights
 

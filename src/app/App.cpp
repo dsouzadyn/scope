@@ -29,6 +29,7 @@ void App::discover_fixtures(const std::string& app_dir) {
     namespace fs = std::filesystem;
     std::vector<fs::path> search_dirs = {
         fs::path(app_dir) / "fixtures",
+        fs::path(app_dir).parent_path() / "Resources" / "fixtures",
         fs::path(app_dir).parent_path() / "fixtures",
         fs::current_path() / "build" / "fixtures",
         fs::current_path() / "fixtures",

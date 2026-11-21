@@ -1,0 +1,88 @@
+name: macOS Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0)"
+        required: true
+        default: "v0.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  release-macos:
+    name: Build & Publish macOS Release (arm64)
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Resolve release tag
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install Homebrew dependencies
+        run: |
+          brew update
+          brew install llvm glfw freetype tree-sitter cmake ninja
+
+      - name: Configure CMake (Release)
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_C_COMPILER=/usr/bin/clang \
+            -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+            -DCMAKE_OBJCXX_COMPILER=/usr/bin/clang++ \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build SCOPE & sample fixtures
+        run: cmake --build build
+
+      - name: Package SCOPE.app & checksums
+        run: |
+          chmod +x scripts/package_macos.sh
+          ./scripts/package_macos.sh "${{ steps.meta.outputs.tag }}" build dist
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: "SCOPE ${{ steps.meta.outputs.tag }} (macOS Apple Silicon)"
+          generate_release_notes: true
+          body: |
+            ## SCOPE ${{ steps.meta.outputs.tag }} — macOS Apple Silicon (Metal)
+
+            ### Runtime Prerequisite
+            `SCOPE.app` bundles GLFW, FreeType, libpng, and Tree-sitter internally, and links against Homebrew LLVM (`liblldb`) for native debugging & `debugserver`:
+
+            ```bash
+            brew install llvm
+            ```
+
+            ### Install
+            1. Download `SCOPE-${{ steps.meta.outputs.tag }}-macos-arm64.zip` (or `.tar.gz`) and extract `SCOPE.app`.
+            2. Because the app is ad-hoc signed, remove quarantine on first run if prompted:
+               ```bash
+               xattr -dr com.apple.quarantine SCOPE.app
+               ```
+            3. Launch `SCOPE.app` or run from terminal with a target binary:
+               ```bash
+               ./SCOPE.app/Contents/MacOS/scope /path/to/your_cpp_binary
+               ```
+          files: |
+            dist/SCOPE-*-macos-*.zip
+            dist/scope-*-macos-*.tar.gz
+            dist/SHA256SUMS.txt
