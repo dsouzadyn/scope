@@ -1,0 +1,6 @@
+build/
+.cache/
+imgui.ini
+.DS_Store
+*.dSYM/
+compile_commands.json
