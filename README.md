@@ -45,7 +45,7 @@ cmake --build build
 # Run full CTest suite (unit tests + 7-suite liblldb integration tests)
 ctest --test-dir build --output-on-failure
 
-# Generate LLVM source-based code coverage (LCOV + HTML + 75% line gate)
+# Generate LLVM source-based code coverage (LCOV + HTML + strict gates: 85% lines, 95% functions, 82% regions, 62% branches)
 cmake -S . -B build-cov -G Ninja -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_OBJCXX_COMPILER=/usr/bin/clang++ -DCMAKE_BUILD_TYPE=Debug -DSCOPE_ENABLE_COVERAGE=ON
 cmake --build build-cov --target scope_unit_tests scope_engine_test fixture_step_basics fixture_stl_containers fixture_memory_watch fixture_multithread fixture_crash_autopsy fixture_hft_orderbook
 ./scripts/coverage.sh build-cov coverage

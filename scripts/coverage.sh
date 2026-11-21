@@ -3,7 +3,12 @@ set -euo pipefail
 
 BUILD_DIR="${1:-build-cov}"
 OUT_DIR="${2:-coverage}"
-MIN_LINES="${MIN_LINES:-75}"
+
+# Strict multi-metric coverage release gates (override via env if needed)
+MIN_LINES="${MIN_LINES:-85}"
+MIN_FUNCTIONS="${MIN_FUNCTIONS:-95}"
+MIN_REGIONS="${MIN_REGIONS:-82}"
+MIN_BRANCHES="${MIN_BRANCHES:-62}"
 
 mkdir -p "${OUT_DIR}"
 rm -f "${OUT_DIR}"/*.profraw "${OUT_DIR}/scope.profdata" "${OUT_DIR}/coverage.info"
@@ -50,22 +55,52 @@ xcrun llvm-cov show \
     -output-dir="${OUT_DIR}/html" \
     "${SRC_FILTER}"
 
-# Parse TOTAL line coverage percentage (column 10 in llvm-cov report TOTAL row)
+# Parse TOTAL row:
+# $1=TOTAL $2=Regions $3=MissedReg $4=RegCov% $5=Funcs $6=MissedFn $7=FnCov%
+# $8=Lines $9=MissedLn $10=LnCov% $11=Branches $12=MissedBr $13=BrCov%
+REG_PCT="$(echo "${REPORT}" | awk '/^TOTAL/ { gsub(/%/, "", $4); print $4 }')"
+FN_PCT="$(echo "${REPORT}" | awk '/^TOTAL/ { gsub(/%/, "", $7); print $7 }')"
 LINE_PCT="$(echo "${REPORT}" | awk '/^TOTAL/ { gsub(/%/, "", $10); print $10 }')"
-echo "[COV] Total engine line coverage: ${LINE_PCT}% (minimum gate: ${MIN_LINES}%)"
+BR_PCT="$(echo "${REPORT}" | awk '/^TOTAL/ { gsub(/%/, "", $13); print $13 }')"
+
+echo "[COV] Gates:"
+echo "  Lines:     ${LINE_PCT}% (min ${MIN_LINES}%)"
+echo "  Functions: ${FN_PCT}% (min ${MIN_FUNCTIONS}%)"
+echo "  Regions:   ${REG_PCT}% (min ${MIN_REGIONS}%)"
+echo "  Branches:  ${BR_PCT}% (min ${MIN_BRANCHES}%)"
 echo "[COV] LCOV: ${OUT_DIR}/coverage.info"
 echo "[COV] HTML: ${OUT_DIR}/html/index.html"
 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
-        echo "## SCOPE Engine Code Coverage (${LINE_PCT}% lines)"
+        echo "## SCOPE Engine Code Coverage"
+        echo "- **Lines**: ${LINE_PCT}% (gate ≥ ${MIN_LINES}%)"
+        echo "- **Functions**: ${FN_PCT}% (gate ≥ ${MIN_FUNCTIONS}%)"
+        echo "- **Regions**: ${REG_PCT}% (gate ≥ ${MIN_REGIONS}%)"
+        echo "- **Branches**: ${BR_PCT}% (gate ≥ ${MIN_BRANCHES}%)"
         echo '```text'
         echo "${REPORT}"
         echo '```'
     } >> "${GITHUB_STEP_SUMMARY}"
 fi
 
-awk -v got="${LINE_PCT}" -v min="${MIN_LINES}" 'BEGIN { exit (got + 0 >= min + 0) ? 0 : 1 }' || {
-    echo "FAIL: Line coverage ${LINE_PCT}% is below minimum threshold ${MIN_LINES}%" >&2
-    exit 1
+check_gate() {
+    local name="$1"
+    local got="$2"
+    local min="$3"
+    awk -v g="${got}" -v m="${min}" 'BEGIN { exit (g + 0 >= m + 0) ? 0 : 1 }' || {
+        echo "FAIL: ${name} coverage ${got}% is below minimum gate ${min}%" >&2
+        return 1
+    }
 }
+
+FAILED=0
+check_gate "Line"     "${LINE_PCT}" "${MIN_LINES}"     || FAILED=1
+check_gate "Function" "${FN_PCT}"   "${MIN_FUNCTIONS}" || FAILED=1
+check_gate "Region"   "${REG_PCT}"  "${MIN_REGIONS}"   || FAILED=1
+check_gate "Branch"   "${BR_PCT}"   "${MIN_BRANCHES}"  || FAILED=1
+
+if [ "${FAILED}" -ne 0 ]; then
+    exit 1
+fi
+echo "ALL COVERAGE THRESHOLD GATES PASSED!"

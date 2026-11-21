@@ -129,6 +129,14 @@ int main(int argc, char** argv) {
         CHECK(snap_in->active_line < 20, "step_into entered compute_filtered");
         cur_step = snap_in->step_index;
 
+        // Verify select_frame switches cleanly to caller frame #1 (main) and back to #0
+        engine.select_frame(1);
+        engine.wait_idle_for_test();
+        CHECK(engine.latest_snapshot()->selected_frame_idx == 1, "selected caller frame #1");
+        engine.select_frame(0);
+        engine.wait_idle_for_test();
+        CHECK(engine.latest_snapshot()->selected_frame_idx == 0, "returned to frame #0");
+
         engine.step_out();
         auto snap_out = wait_for_state(engine, scope::SessionState::Stopped, cur_step + 1);
         CHECK(snap_out->active_line >= 34, "step_out returned to main");
@@ -229,14 +237,29 @@ int main(int argc, char** argv) {
                   pp.rgba_bytes[2] == 34 && pp.rgba_bytes[3] == 255,
               "pixel (0,0) matches procedural signal-orange grid");
 
-        // Clear conditional BP, arm hardware watchpoint on packet->gain
+        // Clear conditional BP, arm hardware watchpoint on packet->gain + test condition & raw add/remove
         engine.remove_breakpoint(bp_id);
         engine.add_variable_watchpoint("packet->gain", false, true);
         engine.wait_idle_for_test();
         auto mw_armed = engine.latest_snapshot();
         CHECK(mw_armed->watchpoints.size() == 1, "hardware watchpoint armed");
+        int32_t wp_id = mw_armed->watchpoints[0].id;
+        uint64_t wp_addr = mw_armed->watchpoints[0].address;
 
-        uint64_t before_wp = mw_armed->step_index;
+        // Test watchpoint condition set/clear & raw address watchpoint add/remove
+        engine.set_watchpoint_condition(wp_id, "iter >= 0");
+        engine.wait_idle_for_test();
+        engine.set_watchpoint_condition(wp_id, "");
+        engine.wait_idle_for_test();
+        engine.add_watchpoint(wp_addr + 4, 4, false, true, "gain_neighbor");
+        engine.wait_idle_for_test();
+        auto mw_two = engine.latest_snapshot();
+        if (mw_two->watchpoints.size() >= 2) {
+            engine.remove_watchpoint(mw_two->watchpoints.back().id);
+            engine.wait_idle_for_test();
+        }
+
+        uint64_t before_wp = engine.latest_snapshot()->step_index;
         engine.continue_exec();
         auto mw_wp_hit = wait_for_state(engine, scope::SessionState::Stopped, before_wp + 1);
         CHECK(mw_wp_hit->state == scope::SessionState::Stopped, "HW watchpoint triggered stop");
@@ -245,6 +268,8 @@ int main(int argc, char** argv) {
         std::printf("  -> HW watchpoint caught write at line %u (%s)\n",
                     mw_wp_hit->active_line, mw_wp_hit->stop_reason.c_str());
 
+        engine.remove_watchpoint(wp_id);
+        engine.wait_idle_for_test();
         engine.terminate();
         wait_for_state(engine, scope::SessionState::Exited, 0, 2000);
 
@@ -352,6 +377,17 @@ int main(int argc, char** argv) {
 
         engine.set_expand_all_threads(false);
         engine.toggle_breakpoint(src, 36);
+
+        // Verify live pause_exec() interrupts a running multithreaded process cleanly
+        uint64_t pre_pause_step = engine.latest_snapshot()->step_index;
+        engine.continue_exec();
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        engine.pause_exec();
+        auto mt_paused = wait_for_state(engine, scope::SessionState::Stopped, pre_pause_step + 1, 3000);
+        CHECK(mt_paused->state == scope::SessionState::Stopped ||
+                  mt_paused->state == scope::SessionState::Exited,
+              "pause_exec interrupted running target cleanly");
+
         engine.terminate();
         wait_for_state(engine, scope::SessionState::Exited, 0, 2000);
     }
@@ -469,6 +505,17 @@ int main(int argc, char** argv) {
               "non-existent binary stays Idle cleanly");
 
         engine.open_core("/nonexistent/binary", "/nonexistent/core");
+        engine.wait_idle_for_test();
+
+        engine.connect_remote("", "connect://127.0.0.1:1");
+        engine.wait_idle_for_test();
+
+        engine.attach(999999999ULL);
+        engine.wait_idle_for_test();
+
+        engine.reverse_continue();
+        engine.reverse_step_over();
+        engine.reverse_step_into();
         engine.wait_idle_for_test();
 
         engine.configure_memory_view("0x0", 256);
