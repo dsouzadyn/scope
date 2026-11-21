@@ -21,7 +21,7 @@ namespace scope {
 
 /// Asynchronous, thread-safe liblldb (SB API) debugging engine.
 ///
-/// All LLDB operations execute on an internal worker `std::jthread` so the 120 FPS
+/// All LLDB operations execute on an internal worker `std::thread` so the 120 FPS
 /// UI thread never blocks. Public control methods enqueue work asynchronously; read
 /// accessors return immutable snapshots protected by an internal mutex.
 ///
@@ -169,7 +169,7 @@ class DebuggerEngine {
         bool enabled = true;
     };
 
-    void worker_loop(std::stop_token st);
+    void worker_loop();
     void enqueue(std::function<void()> fn);
     void poll_lldb_events();
     void drain_process_io();
@@ -277,7 +277,8 @@ class DebuggerEngine {
     HoverEvalResult hover_result_;
     std::vector<ConsoleLine> console_lines_;
 
-    std::jthread worker_;
+    std::atomic<bool> stop_requested_{false};
+    std::thread worker_;
 };
 
 } // namespace scope

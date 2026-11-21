@@ -62,32 +62,42 @@ std::string format_value_string(lldb::SBValue& val) {
 
 std::string stop_reason_name(lldb::StopReason r) {
     switch (r) {
-        case lldb::eStopReasonInvalid:      return "INVALID";
-        case lldb::eStopReasonNone:         return "NONE";
-        case lldb::eStopReasonTrace:        return "STEP";
-        case lldb::eStopReasonBreakpoint:   return "BREAKPOINT";
-        case lldb::eStopReasonWatchpoint:   return "WATCHPOINT";
-        case lldb::eStopReasonSignal:       return "SIGNAL";
-        case lldb::eStopReasonException:    return "EXCEPTION";
-        case lldb::eStopReasonExec:         return "EXEC";
-        case lldb::eStopReasonPlanComplete: return "STEP";
-        case lldb::eStopReasonThreadExiting:return "EXITING";
-        case lldb::eStopReasonInstrumentation: return "INSTRUMENT";
-        default:                            return "STOPPED";
+    case lldb::eStopReasonInvalid:
+        return "INVALID";
+    case lldb::eStopReasonNone:
+        return "NONE";
+    case lldb::eStopReasonTrace:
+        return "STEP";
+    case lldb::eStopReasonBreakpoint:
+        return "BREAKPOINT";
+    case lldb::eStopReasonWatchpoint:
+        return "WATCHPOINT";
+    case lldb::eStopReasonSignal:
+        return "SIGNAL";
+    case lldb::eStopReasonException:
+        return "EXCEPTION";
+    case lldb::eStopReasonExec:
+        return "EXEC";
+    case lldb::eStopReasonPlanComplete:
+        return "STEP";
+    case lldb::eStopReasonThreadExiting:
+        return "EXITING";
+    case lldb::eStopReasonInstrumentation:
+        return "INSTRUMENT";
+    default:
+        return "STOPPED";
     }
 }
 
 bool is_crash_stop(lldb::StopReason r, int32_t signo, const std::string& desc) {
     if (r == lldb::eStopReasonException) return true;
     if (r == lldb::eStopReasonSignal) {
-        if (signo == SIGSEGV || signo == SIGBUS || signo == SIGABRT ||
-            signo == SIGILL || signo == SIGFPE) {
+        if (signo == SIGSEGV || signo == SIGBUS || signo == SIGABRT || signo == SIGILL ||
+            signo == SIGFPE) {
             return true;
         }
-        if (desc.find("SIGSEGV") != std::string::npos ||
-            desc.find("SIGBUS") != std::string::npos ||
-            desc.find("SIGABRT") != std::string::npos ||
-            desc.find("SIGILL") != std::string::npos ||
+        if (desc.find("SIGSEGV") != std::string::npos || desc.find("SIGBUS") != std::string::npos ||
+            desc.find("SIGABRT") != std::string::npos || desc.find("SIGILL") != std::string::npos ||
             desc.find("SIGFPE") != std::string::npos ||
             desc.find("EXC_BAD_ACCESS") != std::string::npos) {
             return true;
@@ -129,11 +139,11 @@ DebuggerEngine::DebuggerEngine() {
     init_snap->state = SessionState::Idle;
     latest_snapshot_ = init_snap;
 
-    worker_ = std::jthread([this](std::stop_token st) { worker_loop(st); });
+    worker_ = std::thread([this] { worker_loop(); });
 }
 
 DebuggerEngine::~DebuggerEngine() {
-    worker_.request_stop();
+    stop_requested_.store(true);
     cmd_cv_.notify_all();
     if (worker_.joinable()) {
         worker_.join();
@@ -161,7 +171,7 @@ void DebuggerEngine::wait_idle_for_test() {
     }
 }
 
-void DebuggerEngine::worker_loop(std::stop_token st) {
+void DebuggerEngine::worker_loop() {
     debugger_ = lldb::SBDebugger::Create(false);
     debugger_.SetAsync(true);
     listener_ = debugger_.GetListener();
@@ -169,16 +179,15 @@ void DebuggerEngine::worker_loop(std::stop_token st) {
     append_console(ConsoleLineKind::System,
                    "SCOPE ENGINE READY // " + safe_str(lldb::SBDebugger::GetVersionString()));
 
-    while (!st.stop_requested()) {
+    while (!stop_requested_.load()) {
         std::function<void()> task;
         {
             std::unique_lock<std::mutex> lock(cmd_mutex_);
             if (cmd_queue_.empty()) {
-                cmd_cv_.wait_for(lock, std::chrono::milliseconds(10), [&] {
-                    return !cmd_queue_.empty() || st.stop_requested();
-                });
+                cmd_cv_.wait_for(lock, std::chrono::milliseconds(10),
+                                 [&] { return !cmd_queue_.empty() || stop_requested_.load(); });
             }
-            if (st.stop_requested()) break;
+            if (stop_requested_.load()) break;
             if (!cmd_queue_.empty()) {
                 task = std::move(cmd_queue_.front());
                 cmd_queue_.pop_front();
@@ -206,10 +215,8 @@ void DebuggerEngine::worker_loop(std::stop_token st) {
     }
 }
 
-void DebuggerEngine::launch(const std::string& exe_path,
-                            const std::vector<std::string>& args,
-                            const std::string& cwd,
-                            bool stop_at_main) {
+void DebuggerEngine::launch(const std::string& exe_path, const std::vector<std::string>& args,
+                            const std::string& cwd, bool stop_at_main) {
     enqueue([this, exe_path, args, cwd, stop_at_main] {
         do_launch(exe_path, args, cwd, stop_at_main);
     });
@@ -250,7 +257,8 @@ void DebuggerEngine::continue_exec() {
         if (process_.IsValid() && process_.GetState() == lldb::eStateStopped) {
             lldb::SBError err = process_.Continue();
             if (err.Fail()) {
-                append_console(ConsoleLineKind::Stderr, "Continue failed: " + safe_str(err.GetCString()));
+                append_console(ConsoleLineKind::Stderr,
+                               "Continue failed: " + safe_str(err.GetCString()));
             } else {
                 publish_snapshot(SessionState::Running, false);
             }
@@ -317,8 +325,9 @@ void DebuggerEngine::step_instruction() {
 void DebuggerEngine::reverse_continue() {
     enqueue([this] {
         if (!process_.IsValid() || !is_remote_) {
-            append_console(ConsoleLineKind::Stderr,
-                           "Reverse execution requires a reverse-capable remote target (e.g. rr gdb-remote).");
+            append_console(
+                ConsoleLineKind::Stderr,
+                "Reverse execution requires a reverse-capable remote target (e.g. rr gdb-remote).");
             return;
         }
         lldb::SBCommandReturnObject ret;
@@ -333,8 +342,9 @@ void DebuggerEngine::reverse_continue() {
 void DebuggerEngine::reverse_step_over() {
     enqueue([this] {
         if (!process_.IsValid() || !is_remote_) {
-            append_console(ConsoleLineKind::Stderr,
-                           "Reverse step requires a reverse-capable remote target (e.g. rr gdb-remote).");
+            append_console(
+                ConsoleLineKind::Stderr,
+                "Reverse step requires a reverse-capable remote target (e.g. rr gdb-remote).");
             return;
         }
         lldb::SBCommandReturnObject ret;
@@ -397,7 +407,8 @@ void DebuggerEngine::toggle_breakpoint(const std::string& file, uint32_t line) {
                     for (uint32_t i = 0; i < n; ++i) {
                         lldb::SBBreakpoint bp = target_.GetBreakpointAtIndex(i);
                         if (bp.GetNumLocations() > 0) {
-                            lldb::SBLineEntry le = bp.GetLocationAtIndex(0).GetAddress().GetLineEntry();
+                            lldb::SBLineEntry le =
+                                bp.GetLocationAtIndex(0).GetAddress().GetLineEntry();
                             std::string f = safe_str(le.GetFileSpec().GetFilename());
                             if (f == target_base && le.GetLine() == line) {
                                 bp_log_messages_.erase(bp.GetID());
@@ -425,9 +436,9 @@ void DebuggerEngine::toggle_breakpoint(const std::string& file, uint32_t line) {
                 bp = target_.BreakpointCreateByLocation(target_base.c_str(), line);
             }
             if (bp.IsValid()) {
-                append_console(ConsoleLineKind::System,
-                               "BP #" + std::to_string(bp.GetID()) + " set at " +
-                               target_base + ":" + std::to_string(line));
+                append_console(ConsoleLineKind::System, "BP #" + std::to_string(bp.GetID()) +
+                                                            " set at " + target_base + ":" +
+                                                            std::to_string(line));
             }
         }
         publish_snapshot(latest_snapshot()->state, false);
@@ -503,11 +514,8 @@ void DebuggerEngine::remove_breakpoint(int32_t bp_id) {
     });
 }
 
-void DebuggerEngine::add_watchpoint(uint64_t address,
-                                    uint64_t byte_size,
-                                    bool watch_read,
-                                    bool watch_write,
-                                    const std::string& label) {
+void DebuggerEngine::add_watchpoint(uint64_t address, uint64_t byte_size, bool watch_read,
+                                    bool watch_write, const std::string& label) {
     enqueue([this, address, byte_size, watch_read, watch_write, label] {
         if (!target_.IsValid() || !process_.IsValid()) return;
         uint64_t clamped_size = std::clamp<uint64_t>(byte_size == 0 ? 4 : byte_size, 1, 8);
@@ -522,16 +530,15 @@ void DebuggerEngine::add_watchpoint(uint64_t address,
                            "Hardware watchpoint failed: " + safe_str(err.GetCString()));
         } else {
             wp_labels_[wp.GetID()] = label.empty() ? format_hex64_grouped(address) : label;
-            append_console(ConsoleLineKind::System,
-                           "HW WATCHPOINT #" + std::to_string(wp.GetID()) + " armed on " +
-                           wp_labels_[wp.GetID()] + " (" + std::to_string(clamped_size) + "B)");
+            append_console(ConsoleLineKind::System, "HW WATCHPOINT #" + std::to_string(wp.GetID()) +
+                                                        " armed on " + wp_labels_[wp.GetID()] +
+                                                        " (" + std::to_string(clamped_size) + "B)");
         }
         publish_snapshot(latest_snapshot()->state, false);
     });
 }
 
-void DebuggerEngine::add_variable_watchpoint(const std::string& expr,
-                                             bool watch_read,
+void DebuggerEngine::add_variable_watchpoint(const std::string& expr, bool watch_read,
                                              bool watch_write) {
     enqueue([this, expr, watch_read, watch_write] {
         if (!process_.IsValid() || process_.GetState() != lldb::eStateStopped) return;
@@ -544,8 +551,7 @@ void DebuggerEngine::add_variable_watchpoint(const std::string& expr,
             val = f.GetValueForVariablePath(expr.c_str());
         }
         if (!val.IsValid() || val.GetError().Fail()) {
-            append_console(ConsoleLineKind::Stderr,
-                           "Cannot resolve watchpoint target: " + expr);
+            append_console(ConsoleLineKind::Stderr, "Cannot resolve watchpoint target: " + expr);
             return;
         }
         lldb::addr_t addr = val.GetLoadAddress();
@@ -566,10 +572,10 @@ void DebuggerEngine::add_variable_watchpoint(const std::string& expr,
                            "Watchpoint error on " + expr + ": " + safe_str(err.GetCString()));
         } else {
             wp_labels_[wp.GetID()] = expr;
-            append_console(ConsoleLineKind::System,
-                           "HW WATCHPOINT #" + std::to_string(wp.GetID()) + " armed on " +
-                           expr + " @ " + format_hex64_grouped(addr) +
-                           " (" + std::to_string(size) + "B)");
+            append_console(ConsoleLineKind::System, "HW WATCHPOINT #" + std::to_string(wp.GetID()) +
+                                                        " armed on " + expr + " @ " +
+                                                        format_hex64_grouped(addr) + " (" +
+                                                        std::to_string(size) + "B)");
         }
         publish_snapshot(latest_snapshot()->state, false);
     });
@@ -581,9 +587,10 @@ void DebuggerEngine::set_watchpoint_condition(int32_t wp_id, const std::string& 
             lldb::SBWatchpoint wp = target_.FindWatchpointByID(wp_id);
             if (wp.IsValid()) {
                 wp.SetCondition(condition.empty() ? nullptr : condition.c_str());
-                append_console(ConsoleLineKind::System,
-                               "HW WATCHPOINT #" + std::to_string(wp_id) +
-                               (condition.empty() ? " condition cleared" : (" condition: " + condition)));
+                append_console(
+                    ConsoleLineKind::System,
+                    "HW WATCHPOINT #" + std::to_string(wp_id) +
+                        (condition.empty() ? " condition cleared" : (" condition: " + condition)));
                 publish_snapshot(latest_snapshot()->state, false);
             }
         }
@@ -748,7 +755,8 @@ void DebuggerEngine::configure_waveform_probe(const std::string& expr, uint32_t 
     });
 }
 
-void DebuggerEngine::configure_pixel_probe(const std::string& expr, int width, int height, int channels) {
+void DebuggerEngine::configure_pixel_probe(const std::string& expr, int width, int height,
+                                           int channels) {
     enqueue([this, expr, width, height, channels] {
         pixel_expr_ = expr;
         pixel_w_ = std::clamp(width, 1, 1024);
@@ -766,8 +774,7 @@ void DebuggerEngine::configure_pointer_graph(const std::string& expr, uint32_t m
     });
 }
 
-void DebuggerEngine::configure_ring_probe(const std::string& buf_expr,
-                                          const std::string& cap_expr,
+void DebuggerEngine::configure_ring_probe(const std::string& buf_expr, const std::string& cap_expr,
                                           const std::string& head_expr,
                                           const std::string& tail_expr) {
     enqueue([this, buf_expr, cap_expr, head_expr, tail_expr] {
@@ -780,8 +787,7 @@ void DebuggerEngine::configure_ring_probe(const std::string& buf_expr,
 }
 
 void DebuggerEngine::configure_orderbook_probe(const std::string& bids_expr,
-                                               const std::string& asks_expr,
-                                               double price_scale) {
+                                               const std::string& asks_expr, double price_scale) {
     enqueue([this, bids_expr, asks_expr, price_scale] {
         book_bids_expr_ = bids_expr;
         book_asks_expr_ = asks_expr;
@@ -790,10 +796,8 @@ void DebuggerEngine::configure_orderbook_probe(const std::string& bids_expr,
     });
 }
 
-void DebuggerEngine::do_launch(const std::string& exe_path,
-                               const std::vector<std::string>& args,
-                               const std::string& cwd,
-                               bool stop_at_main) {
+void DebuggerEngine::do_launch(const std::string& exe_path, const std::vector<std::string>& args,
+                               const std::string& cwd, bool stop_at_main) {
     if (process_.IsValid()) {
         auto st = process_.GetState();
         if (st == lldb::eStateRunning || st == lldb::eStateStopped) {
@@ -847,7 +851,8 @@ void DebuggerEngine::do_launch(const std::string& exe_path,
 
     std::vector<const char*> c_args;
     c_args.reserve(args.size() + 1);
-    for (const auto& a : args) c_args.push_back(a.c_str());
+    for (const auto& a : args)
+        c_args.push_back(a.c_str());
     c_args.push_back(nullptr);
 
     lldb::SBLaunchInfo launch_info(c_args.data());
@@ -858,14 +863,13 @@ void DebuggerEngine::do_launch(const std::string& exe_path,
 
     process_ = target_.Launch(launch_info, err);
     if (!process_.IsValid() || err.Fail()) {
-        append_console(ConsoleLineKind::Stderr,
-                       "Launch failed: " + safe_str(err.GetCString()));
+        append_console(ConsoleLineKind::Stderr, "Launch failed: " + safe_str(err.GetCString()));
         publish_snapshot(SessionState::Idle, false);
         return;
     }
 
-    append_console(ConsoleLineKind::System,
-                   "Launched " + exe_path + " (PID " + std::to_string(process_.GetProcessID()) + ")");
+    append_console(ConsoleLineKind::System, "Launched " + exe_path + " (PID " +
+                                                std::to_string(process_.GetProcessID()) + ")");
     publish_snapshot(SessionState::Running, false);
 }
 
@@ -882,8 +886,8 @@ void DebuggerEngine::do_attach(uint64_t pid) {
     lldb::SBAttachInfo attach_info(static_cast<lldb::pid_t>(pid));
     process_ = target_.Attach(attach_info, err);
     if (!process_.IsValid() || err.Fail()) {
-        append_console(ConsoleLineKind::Stderr,
-                       "Attach to PID " + std::to_string(pid) + " failed: " + safe_str(err.GetCString()));
+        append_console(ConsoleLineKind::Stderr, "Attach to PID " + std::to_string(pid) +
+                                                    " failed: " + safe_str(err.GetCString()));
         return;
     }
     is_core_dump_ = false;
@@ -929,9 +933,9 @@ void DebuggerEngine::do_open_core(const std::string& exe_path, const std::string
         return;
     }
 
-    append_console(ConsoleLineKind::System,
-                   "Loaded CORE DUMP " + core_path + " for " + exe_path +
-                   " (" + std::to_string(process_.GetNumThreads()) + " threads)");
+    append_console(ConsoleLineKind::System, "Loaded CORE DUMP " + core_path + " for " + exe_path +
+                                                " (" + std::to_string(process_.GetNumThreads()) +
+                                                " threads)");
     publish_snapshot(SessionState::Stopped, true);
 }
 
@@ -958,8 +962,8 @@ void DebuggerEngine::do_connect_remote(const std::string& exe_path, const std::s
     }
 
     lldb::SBError err;
-    target_ = debugger_.CreateTarget(exe_path.empty() ? "" : exe_path.c_str(),
-                                     nullptr, nullptr, true, err);
+    target_ = debugger_.CreateTarget(exe_path.empty() ? "" : exe_path.c_str(), nullptr, nullptr,
+                                     true, err);
     if (!target_.IsValid() || err.Fail()) {
         append_console(ConsoleLineKind::Stderr,
                        "Remote target creation failed: " + safe_str(err.GetCString()));
@@ -969,15 +973,15 @@ void DebuggerEngine::do_connect_remote(const std::string& exe_path, const std::s
     apply_pending_breakpoints();
     process_ = target_.ConnectRemote(listener_, remote_url.c_str(), "gdb-remote", err);
     if (!process_.IsValid() || err.Fail()) {
-        append_console(ConsoleLineKind::Stderr,
-                       "ConnectRemote failed ('" + remote_url + "'): " + safe_str(err.GetCString()));
+        append_console(ConsoleLineKind::Stderr, "ConnectRemote failed ('" + remote_url +
+                                                    "'): " + safe_str(err.GetCString()));
         is_remote_ = false;
         return;
     }
 
-    append_console(ConsoleLineKind::System,
-                   "Connected remote gdb-remote/rr at " + remote_url +
-                   " (PID " + std::to_string(process_.GetProcessID()) + ")");
+    append_console(ConsoleLineKind::System, "Connected remote gdb-remote/rr at " + remote_url +
+                                                " (PID " + std::to_string(process_.GetProcessID()) +
+                                                ")");
     publish_snapshot(SessionState::Stopped, true);
 }
 
@@ -1028,14 +1032,15 @@ void DebuggerEngine::poll_lldb_events() {
                         }
                     }
 
-                    // Check if stopped at a logpoint -> safely evaluate {expr} + Δt while stopped, then auto-continue!
+                    // Check if stopped at a logpoint -> safely evaluate {expr} + Δt while stopped,
+                    // then auto-continue!
                     lldb::SBThread t = process_.GetSelectedThread();
                     if (t.IsValid() && t.GetStopReason() == lldb::eStopReasonBreakpoint) {
                         int32_t bp_id = static_cast<int32_t>(t.GetStopReasonDataAtIndex(0));
                         auto it = bp_log_messages_.find(bp_id);
                         if (it != bp_log_messages_.end()) {
-                            std::string msg = interpolate_logpoint_msg(
-                                bp_id, it->second, t.GetFrameAtIndex(0));
+                            std::string msg =
+                                interpolate_logpoint_msg(bp_id, it->second, t.GetFrameAtIndex(0));
                             append_console(ConsoleLineKind::System, msg);
                             process_.Continue();
                             continue;
@@ -1057,8 +1062,8 @@ void DebuggerEngine::poll_lldb_events() {
                     publish_snapshot(SessionState::Fault, true);
                 }
             }
-            if (event_type & (lldb::SBProcess::eBroadcastBitSTDOUT |
-                              lldb::SBProcess::eBroadcastBitSTDERR)) {
+            if (event_type &
+                (lldb::SBProcess::eBroadcastBitSTDOUT | lldb::SBProcess::eBroadcastBitSTDERR)) {
                 drain_process_io();
             }
         }
@@ -1079,16 +1084,17 @@ void DebuggerEngine::drain_process_io() {
     }
 }
 
-std::string DebuggerEngine::interpolate_logpoint_msg(int32_t bp_id,
-                                                     const std::string& tmpl,
+std::string DebuggerEngine::interpolate_logpoint_msg(int32_t bp_id, const std::string& tmpl,
                                                      lldb::SBFrame frame) {
     auto now = std::chrono::steady_clock::now();
     std::string dt_str;
     if (auto it = bp_last_hit_.find(bp_id); it != bp_last_hit_.end()) {
         double us = std::chrono::duration<double, std::micro>(now - it->second).count();
         char dbuf[48];
-        if (us < 1000.0) std::snprintf(dbuf, sizeof(dbuf), " +%.1fus", us);
-        else std::snprintf(dbuf, sizeof(dbuf), " +%.2fms", us / 1000.0);
+        if (us < 1000.0)
+            std::snprintf(dbuf, sizeof(dbuf), " +%.1fus", us);
+        else
+            std::snprintf(dbuf, sizeof(dbuf), " +%.2fms", us / 1000.0);
         dt_str = dbuf;
     }
     bp_last_hit_[bp_id] = now;
@@ -1154,8 +1160,7 @@ ProvenanceKind DebuggerEngine::classify_address_lazy(uint64_t addr, uint64_t sp)
                        name.find("STACK") != std::string::npos) {
                 kind = ProvenanceKind::Stack;
             } else if (name.find("MALLOC") != std::string::npos ||
-                       name.find("heap") != std::string::npos ||
-                       name.empty()) {
+                       name.find("heap") != std::string::npos || name.empty()) {
                 kind = ProvenanceKind::Heap;
             } else {
                 kind = ProvenanceKind::Data;
@@ -1166,9 +1171,7 @@ ProvenanceKind DebuggerEngine::classify_address_lazy(uint64_t addr, uint64_t sp)
     return kind;
 }
 
-VarNode DebuggerEngine::extract_var(lldb::SBValue val,
-                                    const std::string& expr_path,
-                                    int depth,
+VarNode DebuggerEngine::extract_var(lldb::SBValue val, const std::string& expr_path, int depth,
                                     uint64_t sp,
                                     const std::unordered_map<std::string, std::string>& prev_values,
                                     std::vector<StepDeltaEntry>* deltas,
@@ -1213,9 +1216,8 @@ VarNode DebuggerEngine::extract_var(lldb::SBValue val,
 
     if (depth < 2 && num_children > 0) {
         // Avoid dereferencing null or unmapped pointers
-        bool skip_children = node.is_pointer &&
-                             (node.provenance == ProvenanceKind::Null ||
-                              node.provenance == ProvenanceKind::Unmapped);
+        bool skip_children = node.is_pointer && (node.provenance == ProvenanceKind::Null ||
+                                                 node.provenance == ProvenanceKind::Unmapped);
         if (!skip_children) {
             uint32_t limit = std::min<uint32_t>(num_children, 24);
             node.children.reserve(limit);
@@ -1231,8 +1233,8 @@ VarNode DebuggerEngine::extract_var(lldb::SBValue val,
                 } else {
                     cpath = node.expr_path + "." + cname;
                 }
-                node.children.push_back(extract_var(child, cpath, depth + 1, sp,
-                                                    prev_values, deltas, delta_category));
+                node.children.push_back(
+                    extract_var(child, cpath, depth + 1, sp, prev_values, deltas, delta_category));
             }
         }
     }
@@ -1290,8 +1292,7 @@ std::vector<DisasmInstruction> DebuggerEngine::extract_disassembly(lldb::SBFrame
 }
 
 CrashInfo DebuggerEngine::extract_crash_info(lldb::SBThread thread,
-                                             const std::vector<FrameInfo>& frames,
-                                             uint64_t sp) {
+                                             const std::vector<FrameInfo>& frames, uint64_t sp) {
     CrashInfo ci;
     if (!thread.IsValid()) return ci;
 
@@ -1309,23 +1310,30 @@ CrashInfo DebuggerEngine::extract_crash_info(lldb::SBThread thread,
     ci.summary = desc;
     if (reason == lldb::eStopReasonSignal) {
         ci.signal_number = signo;
-        if (signo == SIGSEGV || desc.find("SIGSEGV") != std::string::npos) ci.signal_name = "SIGSEGV";
-        else if (signo == SIGBUS || desc.find("SIGBUS") != std::string::npos) ci.signal_name = "SIGBUS";
-        else if (signo == SIGABRT || desc.find("SIGABRT") != std::string::npos) ci.signal_name = "SIGABRT";
-        else if (signo == SIGILL || desc.find("SIGILL") != std::string::npos) ci.signal_name = "SIGILL";
-        else if (signo == SIGFPE || desc.find("SIGFPE") != std::string::npos) ci.signal_name = "SIGFPE";
-        else ci.signal_name = "SIGNAL " + std::to_string(ci.signal_number);
+        if (signo == SIGSEGV || desc.find("SIGSEGV") != std::string::npos)
+            ci.signal_name = "SIGSEGV";
+        else if (signo == SIGBUS || desc.find("SIGBUS") != std::string::npos)
+            ci.signal_name = "SIGBUS";
+        else if (signo == SIGABRT || desc.find("SIGABRT") != std::string::npos)
+            ci.signal_name = "SIGABRT";
+        else if (signo == SIGILL || desc.find("SIGILL") != std::string::npos)
+            ci.signal_name = "SIGILL";
+        else if (signo == SIGFPE || desc.find("SIGFPE") != std::string::npos)
+            ci.signal_name = "SIGFPE";
+        else
+            ci.signal_name = "SIGNAL " + std::to_string(ci.signal_number);
     } else {
         ci.signal_name = "EXC_BAD_ACCESS";
-        if (desc.find("EXC_BAD_INSTRUCTION") != std::string::npos) ci.signal_name = "EXC_BAD_INSTRUCTION";
-        else if (desc.find("EXC_ARITHMETIC") != std::string::npos) ci.signal_name = "EXC_ARITHMETIC";
+        if (desc.find("EXC_BAD_INSTRUCTION") != std::string::npos)
+            ci.signal_name = "EXC_BAD_INSTRUCTION";
+        else if (desc.find("EXC_ARITHMETIC") != std::string::npos)
+            ci.signal_name = "EXC_ARITHMETIC";
         auto pos = desc.find("address=");
         if (pos != std::string::npos) {
             size_t start = pos + 8;
             size_t end = start;
-            while (end < desc.size() &&
-                   (std::isxdigit(static_cast<unsigned char>(desc[end])) ||
-                    desc[end] == 'x' || desc[end] == 'X')) {
+            while (end < desc.size() && (std::isxdigit(static_cast<unsigned char>(desc[end])) ||
+                                         desc[end] == 'x' || desc[end] == 'X')) {
                 ++end;
             }
             bool ok = false;
@@ -1343,8 +1351,8 @@ CrashInfo DebuggerEngine::extract_crash_info(lldb::SBThread thread,
         lldb::SBInstructionList il = target_.ReadInstructions(top.GetPCAddress(), 1);
         if (il.IsValid() && il.GetSize() > 0) {
             lldb::SBInstruction inst = il.GetInstructionAtIndex(0);
-            ci.offending_instruction = safe_str(inst.GetMnemonic(target_)) + " " +
-                                       safe_str(inst.GetOperands(target_));
+            ci.offending_instruction =
+                safe_str(inst.GetMnemonic(target_)) + " " + safe_str(inst.GetOperands(target_));
         }
     }
 
@@ -1441,7 +1449,8 @@ void DebuggerEngine::publish_snapshot(SessionState forced_state, bool record_his
             ++step_counter_;
         }
         snap->step_index = step_counter_;
-        // Reset per-stop lazy provenance page cache (O(unique pointer pages) instead of scanning all 4096 VM regions!)
+        // Reset per-stop lazy provenance page cache (O(unique pointer pages) instead of scanning
+        // all 4096 VM regions!)
         page_prov_cache_.clear();
 
         lldb::SBThread sel_thread = process_.GetSelectedThread();
@@ -1557,10 +1566,8 @@ void DebuggerEngine::publish_snapshot(SessionState forced_state, bool record_his
                     lldb::SBValue v = vars.GetValueAtIndex(i);
                     if (!v.IsValid()) continue;
                     std::string vname = safe_str(v.GetName());
-                    VarNode vn = extract_var(v, vname, 0, active_sp,
-                                             prev_local_values_,
-                                             record_history ? &snap->deltas : nullptr,
-                                             "VAR");
+                    VarNode vn = extract_var(v, vname, 0, active_sp, prev_local_values_,
+                                             record_history ? &snap->deltas : nullptr, "VAR");
                     next_locals[vn.expr_path] = vn.value;
                     for (const auto& c : vn.children) {
                         next_locals[c.expr_path] = c.value;
@@ -1579,10 +1586,8 @@ void DebuggerEngine::publish_snapshot(SessionState forced_state, bool record_his
                         v = frame.EvaluateExpression(expr.c_str());
                     }
                     if (v.IsValid() && !v.GetError().Fail()) {
-                        VarNode vn = extract_var(v, expr, 0, active_sp,
-                                                 prev_watch_values_,
-                                                 record_history ? &snap->deltas : nullptr,
-                                                 "WATCH");
+                        VarNode vn = extract_var(v, expr, 0, active_sp, prev_watch_values_,
+                                                 record_history ? &snap->deltas : nullptr, "WATCH");
                         vn.name = expr;
                         next_watches[expr] = vn.value;
                         snap->watches.push_back(std::move(vn));
@@ -1616,7 +1621,8 @@ void DebuggerEngine::publish_snapshot(SessionState forced_state, bool record_his
                         rinfo.byte_size = static_cast<uint32_t>(reg.GetByteSize());
                         rinfo.group = group_name;
 
-                        if (rinfo.byte_size == 16 || rinfo.byte_size == 32 || rinfo.byte_size == 64) {
+                        if (rinfo.byte_size == 16 || rinfo.byte_size == 32 ||
+                            rinfo.byte_size == 64) {
                             lldb::SBData data = reg.GetData();
                             if (data.IsValid() && data.GetByteSize() >= rinfo.byte_size) {
                                 rinfo.raw_bytes.resize(rinfo.byte_size);
@@ -1653,7 +1659,8 @@ void DebuggerEngine::publish_snapshot(SessionState forced_state, bool record_his
         }
     }
 
-    // Auto-refresh active memory & data probes BEFORE publishing snapshot so UI sees atomic consistency
+    // Auto-refresh active memory & data probes BEFORE publishing snapshot so UI sees atomic
+    // consistency
     if (process_.IsValid() &&
         (snap->state == SessionState::Stopped || snap->state == SessionState::Fault)) {
         if (!mem_expr_.empty()) refresh_memory_locked_worker();
@@ -1758,10 +1765,10 @@ void DebuggerEngine::refresh_memory_locked_worker() {
 
             // Compute padding holes between fields and trailing padding
             std::vector<const StructFieldOverlay*> sorted;
-            for (const auto& f : ms.fields) sorted.push_back(&f);
-            std::sort(sorted.begin(), sorted.end(), [](const auto* a, const auto* b) {
-                return a->offset < b->offset;
-            });
+            for (const auto& f : ms.fields)
+                sorted.push_back(&f);
+            std::sort(sorted.begin(), sorted.end(),
+                      [](const auto* a, const auto* b) { return a->offset < b->offset; });
             uint64_t cursor = 0;
             for (const auto* f : sorted) {
                 if (f->offset > cursor) {
@@ -1880,7 +1887,8 @@ void DebuggerEngine::refresh_struct_table_worker() {
 void DebuggerEngine::refresh_waveform_worker() {
     WaveformProbeData wp;
     wp.expr = waveform_expr_;
-    if (!process_.IsValid() || process_.GetState() != lldb::eStateStopped || waveform_expr_.empty()) {
+    if (!process_.IsValid() || process_.GetState() != lldb::eStateStopped ||
+        waveform_expr_.empty()) {
         std::lock_guard<std::mutex> lock(state_mutex_);
         waveform_probe_ = std::move(wp);
         return;
@@ -1923,7 +1931,8 @@ void DebuggerEngine::refresh_waveform_worker() {
         lldb::SBError err;
         size_t got = process_.ReadMemory(base, tmp.data(), n * sizeof(double), err);
         size_t cnt = got / sizeof(double);
-        for (size_t i = 0; i < cnt; ++i) wp.samples.push_back(static_cast<float>(tmp[i]));
+        for (size_t i = 0; i < cnt; ++i)
+            wp.samples.push_back(static_cast<float>(tmp[i]));
     } else {
         for (uint32_t i = 0; i < n; ++i) {
             lldb::SBValue c = v.GetChildAtIndex(i);
@@ -2086,8 +2095,7 @@ void DebuggerEngine::refresh_pointer_graph_worker() {
             if (!fld.IsValid()) continue;
             std::string fname = safe_str(fld.GetName());
             lldb::SBType fty = fld.GetType();
-            if (fty.IsPointerType() &&
-                fty.GetPointeeType().GetCanonicalType().GetName() &&
+            if (fty.IsPointerType() && fty.GetPointeeType().GetCanonicalType().GetName() &&
                 root_type.GetPointeeType().GetCanonicalType().GetName() &&
                 std::strcmp(fty.GetPointeeType().GetCanonicalType().GetName(),
                             root_type.GetPointeeType().GetCanonicalType().GetName()) == 0) {
@@ -2170,7 +2178,8 @@ void DebuggerEngine::refresh_ring_probe_worker() {
     rp.head_expr = ring_head_expr_;
     rp.tail_expr = ring_tail_expr_;
 
-    if (!process_.IsValid() || process_.GetState() != lldb::eStateStopped || ring_buf_expr_.empty()) {
+    if (!process_.IsValid() || process_.GetState() != lldb::eStateStopped ||
+        ring_buf_expr_.empty()) {
         std::lock_guard<std::mutex> lock(state_mutex_);
         ring_probe_ = std::move(rp);
         return;
@@ -2193,7 +2202,8 @@ void DebuggerEngine::refresh_ring_probe_worker() {
         uint64_t val = v.GetValueAsUnsigned(UINT64_MAX);
         if (val == UINT64_MAX && v.GetNumChildren() > 0) {
             lldb::SBValue c = v.GetChildAtIndex(0);
-            while (c.IsValid() && c.GetValueAsUnsigned(UINT64_MAX) == UINT64_MAX && c.GetNumChildren() > 0) {
+            while (c.IsValid() && c.GetValueAsUnsigned(UINT64_MAX) == UINT64_MAX &&
+                   c.GetNumChildren() > 0) {
                 c = c.GetChildAtIndex(0);
             }
             if (c.IsValid()) val = c.GetValueAsUnsigned(UINT64_MAX);
