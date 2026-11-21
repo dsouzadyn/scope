@@ -24,7 +24,11 @@ A **macOS-native C++20** debugger built on **`liblldb` (SB API)**, **Dear ImGui 
   - SIMD lane decoder (`F32 | F64 | I32 | I64 | U8`) for 128/256/512-bit vector registers + `NZCV`/`RFLAGS` LEDs.
   - Smart runtime/stdlib stack folding, `[INL]` inlined frame badges, lazy background thread unwinding, expression-interpolated logpoints with `+Δt` timestamps, **Core Dump** loading (`LoadCore`), and **Remote `lldb-server` / `rr`** reverse debugging.
 
-## Prerequisites (macOS Apple Silicon / Homebrew)
+## Install (Standalone macOS App)
+
+Download **`SCOPE-v0.1.0-macos-arm64.dmg`** from [GitHub Releases](../../releases), open it, and drag **`SCOPE.app`** into **Applications**. The app bundle is 100% self-contained (`liblldb`, LLVM, GLFW, FreeType, Tree-sitter, and sample fixtures included — no Homebrew required).
+
+## Build from Source (macOS Apple Silicon / Homebrew)
 
 ```bash
 brew install lldb glfw freetype tree-sitter cmake ninja

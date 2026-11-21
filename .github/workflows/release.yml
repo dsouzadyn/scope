@@ -35,7 +35,7 @@ jobs:
           fi
           echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
 
-      - name: Install Homebrew dependencies
+      - name: Install Homebrew build dependencies
         run: |
           brew update
           brew install lldb glfw freetype tree-sitter cmake ninja
@@ -71,11 +71,45 @@ jobs:
           chmod +x scripts/coverage.sh
           ./scripts/coverage.sh build-cov coverage
 
-      - name: Gate 4 — Package & Verify SCOPE.app Integrity
+      - name: Import Apple Developer ID Certificate (Optional)
+        if: env.APPLE_CERT_BASE64 != ''
+        env:
+          APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
         run: |
-          chmod +x scripts/package_macos.sh scripts/verify_package.sh
+          KEYCHAIN_PATH="${RUNNER_TEMP}/app-signing.keychain-db"
+          KEYCHAIN_PASS="scope-ci-temp"
+          security create-keychain -p "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}"
+          echo "${APPLE_CERT_BASE64}" | base64 --decode > "${RUNNER_TEMP}/cert.p12"
+          security import "${RUNNER_TEMP}/cert.p12" -P "${APPLE_CERT_PASSWORD}" -A -t cert -f pkcs12 -k "${KEYCHAIN_PATH}"
+          security list-keychain -d user -s "${KEYCHAIN_PATH}"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}"
+
+      - name: Gate 4 — Package & Verify Self-Contained SCOPE.app + DMG
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          chmod +x scripts/package_macos.sh scripts/verify_package.sh scripts/generate_icon.py
           ./scripts/package_macos.sh "${{ steps.meta.outputs.tag }}" build dist
           ./scripts/verify_package.sh dist
+
+      - name: Notarize & Staple DMG (Optional — requires Apple Developer ID secrets)
+        if: env.APPLE_ID != '' && env.APPLE_APP_PASSWORD != '' && env.APPLE_TEAM_ID != ''
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          DMG="dist/SCOPE-${{ steps.meta.outputs.tag }}-macos-arm64.dmg"
+          xcrun notarytool submit "${DMG}" \
+            --apple-id "${APPLE_ID}" \
+            --password "${APPLE_APP_PASSWORD}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --wait
+          xcrun stapler staple "${DMG}"
+          (cd dist && shasum -a 256 SCOPE-*-macos-*.dmg SCOPE-*-macos-*.zip > SHA256SUMS.txt)
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -84,26 +118,17 @@ jobs:
           name: "SCOPE ${{ steps.meta.outputs.tag }} (macOS Apple Silicon)"
           generate_release_notes: true
           body: |
-            ## SCOPE ${{ steps.meta.outputs.tag }} — macOS Apple Silicon (Metal)
+            ## SCOPE ${{ steps.meta.outputs.tag }} — Standalone macOS App (Apple Silicon)
 
-            ### Runtime Prerequisite
-            `SCOPE.app` bundles GLFW, FreeType, libpng, and Tree-sitter internally, and links against Homebrew `lldb` (`liblldb`) for native debugging & `debugserver`:
-
-            ```bash
-            brew install lldb
-            ```
+            100% self-contained `.app` bundle (includes `liblldb`, LLVM, GLFW, FreeType, Tree-sitter, and sample C++ fixtures — **no `brew install` required**).
 
             ### Install
-            1. Download `SCOPE-${{ steps.meta.outputs.tag }}-macos-arm64.zip` (or `.tar.gz`) and extract `SCOPE.app`.
-            2. Because the app is ad-hoc signed, remove quarantine on first run if prompted:
-               ```bash
-               xattr -dr com.apple.quarantine SCOPE.app
-               ```
-            3. Launch `SCOPE.app` or run from terminal with a target binary:
-               ```bash
-               ./SCOPE.app/Contents/MacOS/scope /path/to/your_cpp_binary
-               ```
+            1. Download **`SCOPE-${{ steps.meta.outputs.tag }}-macos-arm64.dmg`**.
+            2. Open the DMG and drag **`SCOPE.app`** into **Applications**.
+            3. Launch **SCOPE** from Applications or Spotlight.
+
+            > **Note on unsigned / ad-hoc builds**: Until signed with a paid Apple Developer ID certificate and notarized, macOS Gatekeeper may show *"Apple could not verify SCOPE is free of malware"* on first launch from a browser download. Click **Done**, then open **System Settings → Privacy & Security → Open Anyway** once.
           files: |
+            dist/SCOPE-*-macos-*.dmg
             dist/SCOPE-*-macos-*.zip
-            dist/scope-*-macos-*.tar.gz
             dist/SHA256SUMS.txt

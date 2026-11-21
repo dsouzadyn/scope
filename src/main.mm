@@ -7,36 +7,55 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
 
-#include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_metal.h>
+#include <imgui.h>
 
 #include "app/App.hpp"
 #include "ui/TextureBridge.hpp"
 #include "ui/Theme.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 
 namespace {
 
-class MetalTextureBridge final : public scope::TextureBridge {
-public:
-    explicit MetalTextureBridge(id<MTLDevice> device) : device_(device) {}
-    ~MetalTextureBridge() override {
-        texture_ = nil;
+// Ensure bundled liblldb uses Apple's officially signed debugserver on macOS
+// so SCOPE.app works standalone with zero Homebrew dependencies.
+void configure_macos_debugserver() {
+    if (std::getenv("LLDB_DEBUGSERVER_PATH") != nullptr) {
+        return;
     }
+    static constexpr const char* kCandidates[] = {
+        "/Library/Developer/CommandLineTools/Library/PrivateFrameworks/LLDB.framework/Versions/A/"
+        "Resources/debugserver",
+        "/Applications/Xcode.app/Contents/SharedFrameworks/LLDB.framework/Versions/A/Resources/"
+        "debugserver",
+    };
+    for (const char* path : kCandidates) {
+        if (std::filesystem::exists(path)) {
+            setenv("LLDB_DEBUGSERVER_PATH", path, 0);
+            return;
+        }
+    }
+}
+
+class MetalTextureBridge final : public scope::TextureBridge {
+  public:
+    explicit MetalTextureBridge(id<MTLDevice> device) : device_(device) {}
+    ~MetalTextureBridge() override { texture_ = nil; }
 
     ImTextureID upload_rgba(int width, int height, const uint8_t* rgba_bytes) override {
         if (!device_ || width <= 0 || height <= 0 || !rgba_bytes) return 0;
 
         if (!texture_ || width_ != width || height_ != height) {
-            MTLTextureDescriptor* desc =
-                [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                                   width:static_cast<NSUInteger>(width)
-                                                                  height:static_cast<NSUInteger>(height)
-                                                               mipmapped:NO];
+            MTLTextureDescriptor* desc = [MTLTextureDescriptor
+                texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                             width:static_cast<NSUInteger>(width)
+                                            height:static_cast<NSUInteger>(height)
+                                         mipmapped:NO];
             desc.usage = MTLTextureUsageShaderRead;
             desc.storageMode = MTLStorageModeShared;
             texture_ = [device_ newTextureWithDescriptor:desc];
@@ -44,8 +63,8 @@ public:
             height_ = height;
         }
 
-        MTLRegion region = MTLRegionMake2D(0, 0, static_cast<NSUInteger>(width),
-                                           static_cast<NSUInteger>(height));
+        MTLRegion region =
+            MTLRegionMake2D(0, 0, static_cast<NSUInteger>(width), static_cast<NSUInteger>(height));
         [texture_ replaceRegion:region
                     mipmapLevel:0
                       withBytes:rgba_bytes
@@ -54,7 +73,7 @@ public:
         return (ImTextureID)(__bridge void*)texture_;
     }
 
-private:
+  private:
     id<MTLDevice> device_ = nil;
     id<MTLTexture> texture_ = nil;
     int width_ = 0;
@@ -69,6 +88,7 @@ void glfw_error_callback(int error, const char* desc) {
 
 int main(int argc, char** argv) {
     @autoreleasepool {
+        configure_macos_debugserver();
         glfwSetErrorCallback(glfw_error_callback);
         if (!glfwInit()) {
             return 1;
@@ -77,7 +97,8 @@ int main(int argc, char** argv) {
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
 
-        GLFWwindow* window = glfwCreateWindow(1540, 960, "SCOPE // C++ PRECISION DEBUGGER", nullptr, nullptr);
+        GLFWwindow* window =
+            glfwCreateWindow(1540, 960, "SCOPE // C++ PRECISION DEBUGGER", nullptr, nullptr);
         if (!window) {
             glfwTerminate();
             return 1;

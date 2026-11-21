@@ -35,7 +35,7 @@ jobs:
 
       - name: Package & Verify macOS SCOPE.app Bundle
         run: |
-          chmod +x scripts/package_macos.sh scripts/verify_package.sh
+          chmod +x scripts/package_macos.sh scripts/verify_package.sh scripts/generate_icon.py
           ./scripts/package_macos.sh "ci-${GITHUB_SHA::7}" build dist
           ./scripts/verify_package.sh dist
 
