@@ -20,7 +20,7 @@ jobs:
       - name: Install Homebrew dependencies
         run: |
           brew update
-          brew install llvm glfw freetype tree-sitter cmake ninja
+          brew install lldb glfw freetype tree-sitter cmake ninja
 
       - name: Configure CMake (RelWithDebInfo)
         run: |

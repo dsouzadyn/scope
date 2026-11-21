@@ -29,10 +29,29 @@ function(detect_brew_prefix var formula fallback)
     endif()
 endfunction()
 
-detect_brew_prefix(LLVM_PREFIX llvm "/opt/homebrew/opt/llvm")
 detect_brew_prefix(GLFW_PREFIX glfw "/opt/homebrew/opt/glfw")
 detect_brew_prefix(FREETYPE_PREFIX freetype "/opt/homebrew/opt/freetype")
 detect_brew_prefix(TREESITTER_PREFIX tree-sitter "/opt/homebrew/opt/tree-sitter")
+
+# Homebrew split lldb into its own keg-only formula in LLVM 23+; older LLVM 22 bundles it inside llvm.
+if(NOT DEFINED LLDB_PREFIX OR "${LLDB_PREFIX}" STREQUAL "")
+    foreach(_formula lldb llvm)
+        execute_process(
+            COMMAND brew --prefix ${_formula}
+            OUTPUT_VARIABLE _cand
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(_cand AND EXISTS "${_cand}/include/lldb/API/LLDB.h")
+            set(LLDB_PREFIX "${_cand}" CACHE PATH "Homebrew LLDB prefix" FORCE)
+            break()
+        endif()
+    endforeach()
+endif()
+if(NOT EXISTS "${LLDB_PREFIX}/include/lldb/API/LLDB.h")
+    message(FATAL_ERROR "Could not find lldb/API/LLDB.h (searched Homebrew lldb & llvm). Run: brew install lldb")
+endif()
+message(STATUS "Using LLDB prefix: ${LLDB_PREFIX}")
 
 # ------------------------------------------------------------------------------
 # 1) Third-party: Dear ImGui (docking + FreeType + GLFW + Metal)
@@ -79,11 +98,11 @@ add_library(scope_engine STATIC
 )
 target_include_directories(scope_engine PUBLIC
     ${CMAKE_SOURCE_DIR}/src
-    ${LLVM_PREFIX}/include
+    ${LLDB_PREFIX}/include
     ${TREESITTER_PREFIX}/include
 )
 target_link_directories(scope_engine PUBLIC
-    ${LLVM_PREFIX}/lib
+    ${LLDB_PREFIX}/lib
     ${TREESITTER_PREFIX}/lib
 )
 target_link_libraries(scope_engine PUBLIC
@@ -92,7 +111,7 @@ target_link_libraries(scope_engine PUBLIC
     ts_cpp
 )
 set_target_properties(scope_engine PROPERTIES
-    BUILD_RPATH "${LLVM_PREFIX}/lib;${TREESITTER_PREFIX}/lib"
+    BUILD_RPATH "${LLDB_PREFIX}/lib;${TREESITTER_PREFIX}/lib"
 )
 if(SCOPE_ENABLE_COVERAGE)
     target_compile_options(scope_engine PRIVATE -fprofile-instr-generate -fcoverage-mapping -O0)
@@ -118,7 +137,7 @@ set_source_files_properties(src/main.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_link_directories(scope PRIVATE
     ${GLFW_PREFIX}/lib
     ${FREETYPE_PREFIX}/lib
-    ${LLVM_PREFIX}/lib
+    ${LLDB_PREFIX}/lib
     ${TREESITTER_PREFIX}/lib
 )
 target_link_libraries(scope PRIVATE
@@ -133,7 +152,7 @@ target_link_libraries(scope PRIVATE
     "-framework CoreVideo"
 )
 set_target_properties(scope PROPERTIES
-    BUILD_RPATH "${LLVM_PREFIX}/lib;${GLFW_PREFIX}/lib;${FREETYPE_PREFIX}/lib;${TREESITTER_PREFIX}/lib"
+    BUILD_RPATH "${LLDB_PREFIX}/lib;${GLFW_PREFIX}/lib;${FREETYPE_PREFIX}/lib;${TREESITTER_PREFIX}/lib"
 )
 
 # ------------------------------------------------------------------------------
@@ -145,7 +164,7 @@ add_subdirectory(fixtures)
 add_executable(scope_unit_tests tests/unit_tests.cpp)
 target_link_libraries(scope_unit_tests PRIVATE scope_engine)
 set_target_properties(scope_unit_tests PROPERTIES
-    BUILD_RPATH "${LLVM_PREFIX}/lib;${TREESITTER_PREFIX}/lib"
+    BUILD_RPATH "${LLDB_PREFIX}/lib;${TREESITTER_PREFIX}/lib"
 )
 add_test(NAME scope_unit_tests
     COMMAND scope_unit_tests "${CMAKE_SOURCE_DIR}/fixtures"
@@ -154,7 +173,7 @@ add_test(NAME scope_unit_tests
 add_executable(scope_engine_test tests/engine_test.cpp)
 target_link_libraries(scope_engine_test PRIVATE scope_engine)
 set_target_properties(scope_engine_test PROPERTIES
-    BUILD_RPATH "${LLVM_PREFIX}/lib;${TREESITTER_PREFIX}/lib"
+    BUILD_RPATH "${LLDB_PREFIX}/lib;${TREESITTER_PREFIX}/lib"
 )
 add_test(NAME scope_engine_test
     COMMAND scope_engine_test "${CMAKE_BINARY_DIR}/fixtures"

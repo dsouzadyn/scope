@@ -27,7 +27,7 @@ A **macOS-native C++20** debugger built on **`liblldb` (SB API)**, **Dear ImGui 
 ## Prerequisites (macOS Apple Silicon / Homebrew)
 
 ```bash
-brew install llvm glfw freetype tree-sitter cmake ninja
+brew install lldb glfw freetype tree-sitter cmake ninja
 ```
 
 ## Build & Test

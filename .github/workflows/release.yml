@@ -38,7 +38,7 @@ jobs:
       - name: Install Homebrew dependencies
         run: |
           brew update
-          brew install llvm glfw freetype tree-sitter cmake ninja
+          brew install lldb glfw freetype tree-sitter cmake ninja
 
       - name: Configure CMake (Release)
         run: |
@@ -87,10 +87,10 @@ jobs:
             ## SCOPE ${{ steps.meta.outputs.tag }} — macOS Apple Silicon (Metal)
 
             ### Runtime Prerequisite
-            `SCOPE.app` bundles GLFW, FreeType, libpng, and Tree-sitter internally, and links against Homebrew LLVM (`liblldb`) for native debugging & `debugserver`:
+            `SCOPE.app` bundles GLFW, FreeType, libpng, and Tree-sitter internally, and links against Homebrew `lldb` (`liblldb`) for native debugging & `debugserver`:
 
             ```bash
-            brew install llvm
+            brew install lldb
             ```
 
             ### Install
