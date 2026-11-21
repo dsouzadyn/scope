@@ -33,6 +33,7 @@ brew install llvm glfw freetype tree-sitter cmake ninja
 ```bash
 git clone --recursive <repo-url>
 cd cppdebugger
+git config core.hooksPath .githooks   # enable pre-commit & pre-push hooks
 
 cmake -S . -B build -G Ninja \
   -DCMAKE_C_COMPILER=/usr/bin/clang \

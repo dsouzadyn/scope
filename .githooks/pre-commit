@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "${ROOT}"
+
+STAGED=()
+while IFS= read -r -d '' file; do
+    STAGED+=("${file}")
+done < <(git diff --cached --name-only -z --diff-filter=ACM)
+
+if [ "${#STAGED[@]}" -eq 0 ]; then
+    exit 0
+fi
+
+# 1) Hygiene checks: merge conflict markers, large files (>2MB), CRLF in scripts/code
+for f in "${STAGED[@]}"; do
+    [ -f "${f}" ] || continue
+    case "${f}" in
+        third_party/*) continue ;;
+    esac
+
+    size="$(wc -c < "${f}" | tr -d ' ')"
+    if [ "${size}" -gt 2097152 ]; then
+        echo "[pre-commit] FAIL: '${f}' is ${size} bytes (> 2MB limit)." >&2
+        exit 1
+    fi
+
+    if grep -nE '^(<<<<<<< |=======$|>>>>>>> )' "${f}" >/dev/null 2>&1; then
+        echo "[pre-commit] FAIL: Merge conflict marker found in '${f}'." >&2
+        exit 1
+    fi
+done
+
+# 2) Shell scripts: bash -n + shellcheck
+SHELL_FILES=()
+for f in "${STAGED[@]}"; do
+    case "${f}" in
+        *.sh|.githooks/*)
+            [ -f "${f}" ] && SHELL_FILES+=("${f}")
+            ;;
+    esac
+done
+if [ "${#SHELL_FILES[@]}" -gt 0 ]; then
+    for sf in "${SHELL_FILES[@]}"; do
+        bash -n "${sf}"
+    done
+    if command -v shellcheck >/dev/null 2>&1; then
+        shellcheck "${SHELL_FILES[@]}"
+    fi
+fi
+
+# 3) C++ / ObjC++ formatting check via clang-format (only on staged files)
+CLANG_FORMAT=""
+if command -v clang-format >/dev/null 2>&1; then
+    CLANG_FORMAT="$(command -v clang-format)"
+elif [ -x "/opt/homebrew/opt/llvm/bin/clang-format" ]; then
+    CLANG_FORMAT="/opt/homebrew/opt/llvm/bin/clang-format"
+fi
+
+CPP_FILES=()
+ENGINE_OR_TEST_CHANGED=0
+for f in "${STAGED[@]}"; do
+    case "${f}" in
+        src/*.cpp|src/*.hpp|src/*.mm|tests/*.cpp|fixtures/*.cpp)
+            [ -f "${f}" ] && CPP_FILES+=("${f}")
+            ;;
+    esac
+    case "${f}" in
+        src/engine/*|tests/*)
+            ENGINE_OR_TEST_CHANGED=1
+            ;;
+    esac
+done
+
+if [ -n "${CLANG_FORMAT}" ] && [ "${#CPP_FILES[@]}" -gt 0 ]; then
+    if ! "${CLANG_FORMAT}" --dry-run --Werror "${CPP_FILES[@]}"; then
+        echo "[pre-commit] FAIL: Formatting issues detected. Fix with:" >&2
+        echo "  ${CLANG_FORMAT} -i ${CPP_FILES[*]}" >&2
+        exit 1
+    fi
+fi
+
+# 4) Fast unit-test gate (<0.5s) when build/ exists and engine/tests changed
+if [ "${ENGINE_OR_TEST_CHANGED}" -eq 1 ] && [ -d "build" ]; then
+    echo "[pre-commit] Building & running fast unit tests..."
+    cmake --build build --target scope_unit_tests >/dev/null
+    ctest --test-dir build --output-on-failure -R "^scope_unit_tests$"
+fi
+
+echo "[pre-commit] All checks passed."

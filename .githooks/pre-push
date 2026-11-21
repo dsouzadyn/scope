@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "${ROOT}"
+
+if [ ! -d "build" ]; then
+    echo "[pre-push] No build/ directory found; skipping local build check (CI will validate)."
+    exit 0
+fi
+
+echo "[pre-push] Verifying build and unit tests..."
+cmake --build build
+ctest --test-dir build --output-on-failure -R "^scope_unit_tests$"
+echo "[pre-push] Ready to push."
